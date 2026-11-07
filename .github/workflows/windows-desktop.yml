@@ -1,0 +1,66 @@
+name: Build PV CrackVision Windows Desktop
+
+on:
+  push:
+    branches:
+      - release/v1.4.8.9-desktop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-desktop:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out release branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Python for training-worker checks
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install application dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Install desktop packager
+        run: npm install --no-save --no-package-lock electron@45.2.3 electron-builder@26.18.1
+
+      - name: Run regression tests
+        run: npm test
+
+      - name: Run Python training-worker tests
+        run: npm run test:training-worker
+
+      - name: Build production web assets
+        run: npm run build
+
+      - name: Build Windows installer and portable executable
+        run: npx electron-builder --win --x64 --config electron-builder.config.cjs --publish never
+
+      - name: Verify Windows deliverables
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem desktop-dist -Filter *.exe -File
+          if ($files.Count -lt 2) { throw "Expected both installer and portable EXE; found $($files.Count)." }
+          $worker = Join-Path 'desktop-dist\win-unpacked\resources\app.asar.unpacked\training' 'train_cell_yolo.py'
+          $dependencyHelper = Join-Path 'desktop-dist\win-unpacked\resources\app.asar.unpacked\training' 'install_package_dependencies.py'
+          if (-not (Test-Path $worker)) { throw "YOLO Python worker was not unpacked for the external Python process: $worker" }
+          if (-not (Test-Path $dependencyHelper)) { throw "Python dependency helper was not unpacked: $dependencyHelper" }
+          $files | ForEach-Object { Write-Host "$($_.Name) - $([math]::Round($_.Length / 1MB, 1)) MB" }
+
+      - name: Upload desktop deliverables
+        uses: actions/upload-artifact@v4
+        with:
+          name: PV-CrackVision-v1.4.8.9-Windows-x64
+          path: desktop-dist/*.exe
+          if-no-files-found: error
+          retention-days: 30

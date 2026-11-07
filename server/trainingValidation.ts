@@ -1,11 +1,11 @@
-/** Shared, deterministic checks for user-feedback training and image-level holdout validation. */
+/** Shared readiness checks for reviewed cell labels and image-level holdout validation. */
 export const TRAINING_REQUIREMENTS = {
-  positives: 30,
-  negatives: 50,
-  images: 10,
-  positiveImages: 3,
-  negativeImages: 3,
-  annotatedRegions: 5,
+  positives: 8,
+  negatives: 8,
+  images: 4,
+  positiveImages: 2,
+  negativeImages: 2,
+  annotatedRegions: 2,
 } as const;
 
 export interface FeedbackReadinessItem {
@@ -81,7 +81,7 @@ function stableHash(value: string): number {
 }
 
 /**
- * Deterministic holdout split by whole image, never by individual windows. It preserves at
+ * Deterministic holdout split by whole image, never by individual cells. It preserves at
  * least one training image for each class and puts at least one image of each class in holdout.
  */
 export function splitByImage<T extends { y: 0 | 1 }>(
@@ -89,7 +89,7 @@ export function splitByImage<T extends { y: 0 | 1 }>(
   validationFraction = 0.25
 ): { train: T[]; validation: T[]; trainImages: string[]; validationImages: string[] } {
   const ordered = [...groups].sort((a, b) => stableHash(a.imageFile) - stableHash(b.imageFile));
-  if (ordered.length < 4) throw new Error('At least four labelled images are required for a separate image-level validation set.');
+  if (ordered.length < 4) throw new Error('At least four labelled images are required for a separate image-level validation set; cell crops from one image are not independent validation samples.');
   const target = Math.min(ordered.length - 2, Math.max(2, Math.ceil(ordered.length * validationFraction)));
   const validationIds = new Set<string>();
   for (const label of [1, 0] as const) {
@@ -119,24 +119,4 @@ export function splitByImage<T extends { y: 0 | 1 }>(
     trainImages: trainGroups.map((group) => group.imageFile),
     validationImages: validationGroups.map((group) => group.imageFile),
   };
-}
-
-/** Negative labels must mine the highest-scoring candidate windows (the hard false positives). */
-export function selectLabelCandidates<T extends { score: number }>(candidates: T[], limit: number): T[] {
-  return [...candidates].sort((a, b) => b.score - a.score).slice(0, Math.max(0, limit));
-}
-
-
-export interface BinaryValidationSummary {
-  recall: number;
-  specificity: number;
-  balancedAccuracy: number;
-  logLoss: number;
-}
-
-/** Do not persist a tuned model unless held-out images show real gain without class regression. */
-export function shouldAcceptCandidate(before: BinaryValidationSummary, after: BinaryValidationSummary): boolean {
-  const classSafe = after.recall >= before.recall - 0.03 && after.specificity >= before.specificity - 0.03;
-  const improved = after.balancedAccuracy >= before.balancedAccuracy + 0.005 || after.logLoss <= before.logLoss - 0.001;
-  return classSafe && improved;
 }

@@ -224,7 +224,7 @@ export interface SolarCellGrid {
   pitchY: number;
   /** Confidence from edge periodicity and per-cell PV occupancy (0..1). */
   confidence: number;
-  method: 'edge-map-periodicity' | 'gridline-periodicity' | 'legacy-fallback' | 'fixed-module-layout';
+  method: 'edge-map-periodicity' | 'gridline-periodicity' | 'legacy-fallback' | 'fixed-module-layout' | 'yolo-cell-detection';
 }
 
 export interface ModuleRegion {
@@ -278,6 +278,15 @@ export interface InspectionResult {
     surfaceResidueCount: number;
   };
   moduleRegions: ModuleRegion[];
+  /** Direct YOLO cell boxes, when an in-app trained cell model is active. */
+  cellDetectionBoxes?: PixelBox[];
+  cellDetectionSource?: 'yolo11n' | 'classical';
+  cellDetectionDiagnostics?: {
+    imageWidth: number; imageHeight: number; modelInputWidth: number; modelInputHeight: number;
+    inferencePasses: number; tilePasses: number; candidateCount: number; candidatesAboveThreshold: number;
+    validBoxesBeforeMerge: number; boxesKept: number; maximumScore: number; confidenceThreshold: number;
+    modelSizeBytes: number; modelModifiedAt: string; outputShape: string; candidatesLimited: number;
+  };
   tiles: TileDiagnostic[];
   anomalies: DetectedAnomaly[];
   /** Single-Point GeoJSON FeatureCollection representing this image and its crack attributes */
