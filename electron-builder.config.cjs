@@ -4,6 +4,7 @@ module.exports = {
   appId: 'com.sharathjrao.pvcrackvision',
   productName: 'PV CrackVision',
   electronVersion: '45.2.3',
+  buildVersion: '1.4.8.9',
   directories: {
     output: 'desktop-dist',
   },
@@ -38,7 +39,7 @@ module.exports = {
       { target: 'nsis', arch: ['x64'] },
       { target: 'portable', arch: ['x64'] },
     ],
-    artifactName: 'PV-CrackVision-${version}-${arch}.${ext}',
+    artifactName: 'PV-CrackVision-1.4.8.9-${arch}.${ext}',
   },
   nsis: {
     oneClick: false,
@@ -50,6 +51,6 @@ module.exports = {
     runAfterFinish: true,
   },
   portable: {
-    artifactName: 'PV-CrackVision-${version}-Portable.${ext}',
+    artifactName: 'PV-CrackVision-1.4.8.9-Portable.${ext}',
   },
 };

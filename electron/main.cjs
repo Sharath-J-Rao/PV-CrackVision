@@ -181,6 +181,22 @@ async function startDesktop() {
   const baseUrl = `http://127.0.0.1:${serverPort}`;
   const health = await waitForHealth(baseUrl);
   log(`Local server ready. Inspection engine: ${health.engine || 'local'}.`);
+  if (process.argv.includes('--pv-smoke-test') || app.commandLine.hasSwitch('pv-smoke-test')) {
+    const unpackedTraining = path.join(process.resourcesPath, 'app.asar.unpacked', 'training');
+    for (const worker of ['train_cell_yolo.py', 'install_package_dependencies.py']) {
+      const workerPath = path.join(unpackedTraining, worker);
+      if (!fs.existsSync(workerPath)) throw new Error(`Packaged Python worker is missing: ${workerPath}`);
+    }
+    const sharpModule = await import('sharp');
+    const sharp = sharpModule.default || sharpModule;
+    const sharpProbe = await sharp({ create: { width: 1, height: 1, channels: 4, background: '#000000' } }).png().toBuffer();
+    if (sharpProbe[0] !== 137 || sharpProbe[1] !== 80) throw new Error('Packaged Sharp failed its PNG smoke test.');
+    const ort = await import('onnxruntime-node');
+    if (typeof ort.InferenceSession?.create !== 'function') throw new Error('Packaged ONNX Runtime did not expose InferenceSession.create.');
+    log('PACKAGED_DESKTOP_SMOKE_TEST_OK: backend health, Sharp native PNG, ONNX Runtime and external Python workers verified.');
+    app.exit(0);
+    return;
+  }
   await createMainWindow(baseUrl);
 }
 

@@ -12,15 +12,15 @@ permissions:
 jobs:
   windows-desktop:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Check out release branch
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Set up Node.js (LTS with npm 10 lifecycle scripts)
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 22.23.4
           cache: npm
 
       - name: Set up Python for training-worker checks
@@ -28,11 +28,27 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install application dependencies
-        run: npm install --no-audit --no-fund
+      - name: Verify release metadata and toolchain
+        shell: pwsh
+        run: |
+          node -e 'const p=require("./package.json"); const l=require("./package-lock.json"); const m=require("./metadata.json"); const b=require("./electron-builder.config.cjs"); if(p.version!=="1.4.8"||l.version!==p.version||l.packages[""].version!==p.version) throw new Error("package.json/package-lock.json SemVer mismatch."); if(m.version!=="1.4.8.9"||b.buildVersion!=="1.4.8.9") throw new Error("Product/Windows version must remain 1.4.8.9."); if(b.win.artifactName!=="PV-CrackVision-1.4.8.9-${arch}.${ext}"||b.portable.artifactName!=="PV-CrackVision-1.4.8.9-Portable.${ext}") throw new Error("Windows artifact names are invalid."); console.log("Package, lockfile, Electron Builder config and product versions verified.");'
+          if ($LASTEXITCODE -ne 0) { throw 'Release metadata validation failed.' }
+          $nodeVersion = (node --version).Trim()
+          $npmVersion = (npm --version).Trim()
+          if ($nodeVersion -ne 'v22.23.4') { throw "Unexpected Node version: $nodeVersion" }
+          if ([int]($npmVersion.Split('.')[0]) -ne 10) { throw "Expected npm 10 to allow required native dependency install scripts; found $npmVersion" }
+          Write-Host "Validated release 1.4.8.9 with Node $nodeVersion and npm $npmVersion."
 
-      - name: Install desktop packager
+      - name: Install locked application dependencies (npm lifecycle scripts enabled)
+        run: npm ci --no-audit --no-fund
+
+      - name: Install pinned desktop packager
         run: npm install --no-save --no-package-lock electron@45.2.3 electron-builder@26.18.1
+
+      - name: Verify native image and ONNX dependencies
+        shell: pwsh
+        run: |
+          node --input-type=module -e "const sharp=(await import('sharp')).default; const png=await sharp({create:{width:1,height:1,channels:4,background:'#000000'}}).png().toBuffer(); if(png[0]!==137||png[1]!==80) throw new Error('Sharp native smoke test failed.'); const ort=await import('onnxruntime-node'); if(typeof ort.InferenceSession?.create!=='function') throw new Error('ONNX Runtime native module failed to load.'); console.log('Sharp and ONNX Runtime native modules loaded successfully.');"
 
       - name: Run regression tests
         run: npm test
@@ -40,27 +56,65 @@ jobs:
       - name: Run Python training-worker tests
         run: npm run test:training-worker
 
+      - name: Run strict TypeScript check
+        run: npm run lint
+
       - name: Build production web assets
         run: npm run build
 
       - name: Build Windows installer and portable executable
         run: npx electron-builder --win --x64 --config electron-builder.config.cjs --publish never
 
-      - name: Verify Windows deliverables
+      - name: Verify packaged files and Windows version resources
         shell: pwsh
         run: |
-          $files = Get-ChildItem desktop-dist -Filter *.exe -File
-          if ($files.Count -lt 2) { throw "Expected both installer and portable EXE; found $($files.Count)." }
-          $worker = Join-Path 'desktop-dist\win-unpacked\resources\app.asar.unpacked\training' 'train_cell_yolo.py'
-          $dependencyHelper = Join-Path 'desktop-dist\win-unpacked\resources\app.asar.unpacked\training' 'install_package_dependencies.py'
-          if (-not (Test-Path $worker)) { throw "YOLO Python worker was not unpacked for the external Python process: $worker" }
-          if (-not (Test-Path $dependencyHelper)) { throw "Python dependency helper was not unpacked: $dependencyHelper" }
-          $files | ForEach-Object { Write-Host "$($_.Name) - $([math]::Round($_.Length / 1MB, 1)) MB" }
+          $installer = Join-Path $PWD 'desktop-dist\PV-CrackVision-1.4.8.9-x64.exe'
+          $portable = Join-Path $PWD 'desktop-dist\PV-CrackVision-1.4.8.9-Portable.exe'
+          $unpacked = Join-Path $PWD 'desktop-dist\win-unpacked'
+          foreach ($file in @($installer, $portable)) { if (-not (Test-Path $file -PathType Leaf)) { throw "Missing Windows deliverable: $file" } }
+          $appExe = Join-Path $unpacked 'PV CrackVision.exe'
+          if (-not (Test-Path $appExe -PathType Leaf)) { throw "Unpacked application executable is missing: $appExe" }
+          $resources = Join-Path $unpacked 'resources'
+          $workerDir = Join-Path $resources 'app.asar.unpacked\training'
+          foreach ($worker in @('train_cell_yolo.py', 'install_package_dependencies.py')) { if (-not (Test-Path (Join-Path $workerDir $worker))) { throw "Unpacked Python worker is missing: $worker" } }
+          $asar = Join-Path $resources 'app.asar'
+          if (-not (Test-Path $asar -PathType Leaf)) { throw 'resources\app.asar is missing.' }
+          $ortDir = Join-Path $resources 'app.asar.unpacked\node_modules\onnxruntime-node'
+          $ortNative = Get-ChildItem -Path $ortDir -Recurse -File -Include '*.node' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $ortNative) { throw 'Packaged ONNX Runtime native binding is missing from app.asar.unpacked.' }
+          $sharpDir = Join-Path $resources 'app.asar.unpacked\node_modules\@img'
+          if (-not (Test-Path $sharpDir)) { throw 'Unpacked Sharp platform package directory is missing.' }
+          $appVersion = (Get-Item $appExe).VersionInfo.FileVersion
+          if ($appVersion -notmatch '1\.4\.8\.9') { throw "Expected application Windows FileVersion 1.4.8.9; found $appVersion" }
+          Write-Host "Application executable: $appExe ($appVersion)"
+          Write-Host "Installer: $installer"
+          Write-Host "Portable: $portable"
 
-      - name: Upload desktop deliverables
+      - name: Smoke-test the packaged desktop server and ONNX runtime
+        shell: pwsh
+        run: |
+          $appExe = Join-Path $PWD 'desktop-dist\win-unpacked\PV CrackVision.exe'
+          $env:PV_CRACKVISION_DATA_DIR = Join-Path $env:RUNNER_TEMP 'pv-crackvision-smoke-data'
+          New-Item -ItemType Directory -Force -Path $env:PV_CRACKVISION_DATA_DIR | Out-Null
+          $profileLog = Join-Path $env:APPDATA 'PV CrackVision\logs\desktop.log'
+          if (Test-Path $profileLog) { Remove-Item $profileLog -Force }
+          $process = Start-Process -FilePath $appExe -ArgumentList @('--pv-smoke-test', '--disable-gpu') -PassThru -WindowStyle Hidden
+          $deadline = (Get-Date).AddSeconds(120)
+          while (-not $process.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1; $process.Refresh() }
+          if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue; throw 'Packaged desktop smoke test timed out after 120 seconds.' }
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path $profileLog) { Get-Content $profileLog -Tail 100 | Write-Host }
+            throw "Packaged desktop smoke test exited with code $($process.ExitCode)."
+          }
+          if (-not (Test-Path $profileLog) -or -not (Select-String -Path $profileLog -Pattern 'PACKAGED_DESKTOP_SMOKE_TEST_OK' -Quiet)) { if (Test-Path $profileLog) { Get-Content $profileLog -Tail 100 | Write-Host }; throw 'Desktop smoke-test success marker was not written.' }
+          Write-Host 'Packaged desktop startup, /api/health, Sharp, ONNX Runtime and external workers passed.'
+
+      - name: Upload verified Windows deliverables
         uses: actions/upload-artifact@v4
         with:
           name: PV-CrackVision-v1.4.8.9-Windows-x64
-          path: desktop-dist/*.exe
+          path: |
+            desktop-dist/PV-CrackVision-1.4.8.9-x64.exe
+            desktop-dist/PV-CrackVision-1.4.8.9-Portable.exe
           if-no-files-found: error
           retention-days: 30
