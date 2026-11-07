@@ -92,12 +92,28 @@ export function rebaseMigratedStatePaths(text: string, legacyRoot: string): stri
     [path.join(legacyRoot, 'training'), DATA_TRAINING_DIR],
     [legacyRoot, APP_ROOT],
   ];
-  let result = text;
-  for (const [from, to] of replacements) {
-    const escaped = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[\\/]+/g, '[\\\\/]');
-    result = result.replace(new RegExp(escaped, 'gi'), to);
-  }
-  return result;
+  const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const replacePath = (value: string, from: string, to: string) => {
+    // Match either slash style and repeated separators. Operate on parsed JSON
+    // strings below so Windows JSON escaping cannot defeat the path match.
+    const leadingSeparator = /^[\\/]/.test(from) ? '(?:\\\\|/)+' : '';
+    const pattern = leadingSeparator + from.split(/[\\/]+/).filter(Boolean).map(escapeRegex).join('(?:\\\\|/)+');
+    return value.replace(new RegExp(pattern, 'gi'), () => to);
+  };
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); }
+  catch { return text; }
+  const rebaseValue = (value: unknown): unknown => {
+    if (typeof value === 'string') {
+      return replacements.reduce((current, [from, to]) => replacePath(current, from, to), value);
+    }
+    if (Array.isArray(value)) return value.map(rebaseValue);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, rebaseValue(child)]));
+    }
+    return value;
+  };
+  return JSON.stringify(rebaseValue(parsed), null, 2);
 }
 
 let importedFileCount = 0;
