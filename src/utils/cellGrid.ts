@@ -1,10 +1,11 @@
-import type { PixelBox } from '../types/inspection';
+import type { PixelBox, SolarCellBox } from '../types/inspection';
 
 export interface CellGridEstimate {
   rows: number;
   columns: number;
   confidence: number;
   method: 'reference-cell';
+  cells: SolarCellBox[];
   /** Bounding box of the contiguous PV-cell array inferred from the reference cell. */
   pixelBox: PixelBox;
 }
@@ -82,9 +83,11 @@ export async function detectCellGrid(
 
   const refCx = ref.left + ref.width / 2;
   const refCy = ref.top + ref.height / 2;
+  if (pvScore(refCx, refCy) < 0.64) {
+    throw new Error('The four-point reference does not contain a clearly PV-like cell interior. Choose a different visible cell.');
+  }
   const scan = (dx: number, dy: number): { count: number; confidence: number } => {
     let lastValid = 0;
-    let misses = 0;
     let totalScore = 0;
     let validSamples = 0;
     const maxSteps = Math.ceil(Math.max(imageW / ref.width, imageH / ref.height)) + 1;
@@ -103,13 +106,12 @@ export async function detectCellGrid(
       const score = pvScore(cx, cy);
       if (score >= 0.64) {
         lastValid = step;
-        misses = 0;
         totalScore += score;
         validSamples++;
       } else {
-        misses++;
-        // One weak cell can occur under glare; two consecutive misses normally mark a frame/gap.
-        if (misses >= 2) break;
+        // Stop at the first gap or non-PV cell. Bridging even one missing slot could
+        // incorrectly join two adjacent PV panels into one manual fallback region.
+        break;
       }
     }
     return {
@@ -129,18 +131,43 @@ export async function detectCellGrid(
   }
 
   const pixelBox: PixelBox = {
-    left: Math.round(referenceCell.left - left.count * cellWidth),
-    top: Math.round(referenceCell.top - up.count * cellHeight),
-    width: Math.round(columns * cellWidth),
-    height: Math.round(rows * cellHeight),
+    left: Math.max(0, Math.round(referenceCell.left - left.count * cellWidth)),
+    top: Math.max(0, Math.round(referenceCell.top - up.count * cellHeight)),
+    width: Math.min(imageBounds.width, Math.round(columns * cellWidth)),
+    height: Math.min(imageBounds.height, Math.round(rows * cellHeight)),
   };
   const confidence = (left.confidence + right.confidence + up.confidence + down.confidence) / 4;
+  const cells: SolarCellBox[] = [];
+  for (let rowOffset = -up.count; rowOffset <= down.count; rowOffset++) {
+    for (let colOffset = -left.count; colOffset <= right.count; colOffset++) {
+      const box: PixelBox = {
+        left: Math.round(referenceCell.left + colOffset * cellWidth),
+        top: Math.round(referenceCell.top + rowOffset * cellHeight),
+        width: Math.round(cellWidth),
+        height: Math.round(cellHeight),
+      };
+      // Manual geometry is a fallback, not permission to fill a regular lattice blindly.
+      // Re-check each proposed cell centre against the local PV-silicon colour signature.
+      if (box.left < 0 || box.top < 0 || box.left + box.width > imageBounds.width || box.top + box.height > imageBounds.height) continue;
+      const score = pvScore((box.left + box.width / 2) * scale, (box.top + box.height / 2) * scale);
+      if (score < 0.64) continue;
+      cells.push({
+        row: rowOffset + up.count + 1,
+        column: colOffset + left.count + 1,
+        pixelBox: box,
+        confidence: Number(Math.max(0, Math.min(1, score)).toFixed(3)),
+        partial: false,
+      });
+    }
+  }
+  if (cells.length < 4) throw new Error('Manual fallback found fewer than four PV-like cells. Choose a clearly visible, unobstructed reference cell.');
   return {
     rows,
     columns,
     confidence: Math.max(0, Math.min(1, confidence)),
     method: 'reference-cell',
     pixelBox,
+    cells,
   };
 }
 

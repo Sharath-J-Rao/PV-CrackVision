@@ -1,0 +1,111 @@
+name: Build PV CrackVision Windows Desktop
+
+on:
+  push:
+    branches:
+      - release/v1.4.13.1-desktop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-desktop:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out release branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Python for training-worker checks
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install application dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install desktop packager
+        run: npm install --no-save --no-package-lock electron@45.2.3 electron-builder@26.18.1
+
+      - name: Read version
+        id: ver
+        shell: pwsh
+        run: "'version=' + (Get-Content package.json -Raw | ConvertFrom-Json).version >> $env:GITHUB_OUTPUT"
+
+      - name: Release identity check
+        run: node scripts/check-release-version.mjs
+
+      - name: Verify bundled AI models (required for the offline EXE)
+        run: node scripts/model-manifest.mjs check --require
+
+      - name: Strict TypeScript check
+        run: npm run lint
+
+      - name: Run regression tests
+        run: npm test
+
+      - name: Run Python training-worker tests
+        run: npm run test:training-worker
+
+      - name: Build production web assets
+        run: npm run build
+
+      - name: Build Windows installer and portable executable
+        run: npx electron-builder --win --x64 --config electron-builder.config.cjs --publish never
+
+      - name: Verify Windows deliverables
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem desktop-dist -Filter *.exe -File
+          if ($files.Count -lt 2) { throw "Expected both installer and portable EXE; found $($files.Count)." }
+          $worker = Join-Path 'desktop-dist\win-unpacked\resources\app.asar.unpacked\training' 'train_cell_yolo.py'
+          $dependencyHelper = Join-Path 'desktop-dist\win-unpacked\resources\app.asar.unpacked\training' 'install_package_dependencies.py'
+          $bundledModels = 'desktop-dist\win-unpacked\resources\models'
+          foreach ($m in @('cell.onnx','cellCrackModel.user.json','manifest.json')) { if (-not (Test-Path (Join-Path $bundledModels $m))) { throw "Bundled model missing from the package: $m" } }
+          if (-not (Test-Path $worker)) { throw "YOLO Python worker was not unpacked for the external Python process: $worker" }
+          if (-not (Test-Path $dependencyHelper)) { throw "Python dependency helper was not unpacked: $dependencyHelper" }
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          foreach ($name in @("PV-CrackVision-$version-x64.exe", "PV-CrackVision-$version-Portable.exe")) {
+            if (-not (Test-Path (Join-Path desktop-dist $name))) { throw "Missing expected deliverable: $name" }
+          }
+          $files | ForEach-Object { Write-Host "$($_.Name) - $([math]::Round($_.Length / 1MB, 1)) MB" }
+
+      - name: Smoke-test the packaged application
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $exe = Get-ChildItem 'desktop-dist\win-unpacked' -Filter '*.exe' -File | Where-Object { $_.Name -notmatch 'Uninstall' } | Select-Object -First 1
+          if (-not $exe) { throw 'Unpacked application executable not found.' }
+          $env:PV_SMOKE_TEST = '1'
+          $env:PV_EXPECT_VERSION = $version
+          $env:PV_REQUIRE_MODELS = '1'
+          $proc = Start-Process -FilePath $exe.FullName -PassThru
+          if (-not $proc.WaitForExit(150000)) { $proc.Kill(); throw 'Smoke test timed out after 150 s.' }
+          $log = Join-Path $env:APPDATA 'PV CrackVision\logs\desktop.log'
+          if (Test-Path $log) { Get-Content $log -Tail 40 }
+          if ($proc.ExitCode -ne 0) { throw "Packaged app smoke test failed (exit code $($proc.ExitCode))." }
+
+      - name: Upload desktop diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-smoke-log
+          path: ${{ env.APPDATA }}/PV CrackVision/logs/desktop.log
+          if-no-files-found: ignore
+
+      - name: Upload desktop deliverables
+        uses: actions/upload-artifact@v4
+        with:
+          name: PV-CrackVision-v1.4.13.1-Windows-x64
+          path: |
+            desktop-dist/PV-CrackVision-${{ steps.ver.outputs.version }}-x64.exe
+            desktop-dist/PV-CrackVision-${{ steps.ver.outputs.version }}-Portable.exe
+          if-no-files-found: error
+          retention-days: 30

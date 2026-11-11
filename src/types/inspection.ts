@@ -185,6 +185,8 @@ export interface DetectedAnomaly {
   offAxisEdgeScore: number;
   /** 'user' = issue added manually in the UI (also stored as a training positive) */
   source?: 'model' | 'user';
+  /** v1.4.13.1: id of the training label stored for a manually added crack, so removing the crack also removes its label. */
+  feedbackId?: string;
 }
 
 export interface TileDiagnostic {
@@ -224,7 +226,7 @@ export interface SolarCellGrid {
   pitchY: number;
   /** Confidence from edge periodicity and per-cell PV occupancy (0..1). */
   confidence: number;
-  method: 'edge-map-periodicity' | 'gridline-periodicity' | 'legacy-fallback' | 'fixed-module-layout';
+  method: 'edge-map-periodicity' | 'gridline-periodicity' | 'legacy-fallback' | 'fixed-module-layout' | 'yolo-cell-detection';
 }
 
 export interface ModuleRegion {
@@ -264,7 +266,7 @@ export interface InspectionResult {
   analyzedAt: string;
   processingTimeMs: number;
   modelUsed: string;
-  /** Non-fatal notes, e.g. Gemini unavailable so classical-only detection ran */
+  /** Non-fatal notes, e.g. a bundled model failed its integrity check */
   warnings?: string[];
   geoReference: GeoReferenceInfo;
   pipelineSummary: {
@@ -278,6 +280,20 @@ export interface InspectionResult {
     surfaceResidueCount: number;
   };
   moduleRegions: ModuleRegion[];
+  /** Direct YOLO cell boxes, when an in-app trained cell model is active. */
+  cellDetectionBoxes?: PixelBox[];
+  cellDetectionSource?: 'yolo11n' | 'classical';
+  /**
+   * Which cells the crack classifier inspected: the operator's Cell Annotation boxes, direct YOLO boxes from this pass,
+   * the classical edge-periodicity grid (fallback), or none (no reviewed cells and fallback off).
+   */
+  cellBasis?: 'reviewed-cells' | 'yolo-cells' | 'classical-grid' | 'none';
+  cellDetectionDiagnostics?: {
+    imageWidth: number; imageHeight: number; modelInputWidth: number; modelInputHeight: number;
+    inferencePasses: number; tilePasses: number; candidateCount: number; candidatesAboveThreshold: number;
+    validBoxesBeforeMerge: number; boxesKept: number; maximumScore: number; confidenceThreshold: number;
+    modelSizeBytes: number; modelModifiedAt: string; outputShape: string; candidatesLimited: number;
+  };
   tiles: TileDiagnostic[];
   anomalies: DetectedAnomaly[];
   /** Single-Point GeoJSON FeatureCollection representing this image and its crack attributes */
