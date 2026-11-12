@@ -7,6 +7,7 @@
 - **Fix:** deleting a crack you added by hand now also removes its stored "cracked" training label.
 - **Fix:** restoring a deleted detection no longer deletes the label if that cell has since been re-labelled Cracked.
 - Tests: `server/modelResolver.test.mjs`.
+- **Models included:** `cell.onnx` and `cellCrackModel.user.json` (model version `cell-ensemble-v1.4.13-1-733`) are bundled with a generated `manifest.json`.
 
 ## v1.4.12.9 - fewer crack false positives on module edges, Select all / bulk delete for cracks
 - **"Edge" now means the outer ring of the detected cell grid** (the outer rectangle of the real cells) at crack-detection time. Previously it was measured from the module-region outline, so the ring moved with how loose or tight that box was (a loose box could miss outer cells, a tight one could include the second row). The trainer's edge sample weight still uses the module outline and is unchanged.
