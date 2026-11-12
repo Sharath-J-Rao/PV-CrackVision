@@ -96,8 +96,11 @@ export function rebaseMigratedStatePaths(text: string, legacyRoot: string): stri
   ];
   let result = text;
   for (const [from, to] of replacements) {
-    const escaped = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[\\/]+/g, '[\\\\/]');
-    result = result.replace(new RegExp(escaped, 'gi'), to);
+    // v1.4.13.1: job-state is JSON, so Windows separators appear doubled ("\\\\"); match one-or-more separators and write the
+    // replacement JSON-escaped so the rebased file stays valid JSON with correct paths on every platform.
+    const escaped = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/(?:\\\\|\/)+/g, '[\\\\/]+');
+    const jsonTo = JSON.stringify(to).slice(1, -1);
+    result = result.replace(new RegExp(escaped, 'gi'), () => jsonTo);
   }
   return result;
 }

@@ -17,5 +17,6 @@ test('external Python workers resolve to the physical app.asar.unpacked script p
 });
 
 test('source installs continue to resolve workers from the project root', () => {
-  assert.equal(resolveExternalWorkerPath('training/install_package_dependencies.py', '/opt/pv-crackvision'), '/opt/pv-crackvision/training/install_package_dependencies.py');
+  const root = path.join(path.sep, 'opt', 'pv-crackvision'); // platform-neutral (Windows CI uses backslashes)
+  assert.equal(resolveExternalWorkerPath('training/install_package_dependencies.py', root), path.join(root, 'training', 'install_package_dependencies.py'));
 });
