@@ -87,8 +87,8 @@ jobs:
           $env:PV_EXPECT_VERSION = $version
           $env:PV_REQUIRE_MODELS = '1'
           $proc = Start-Process -FilePath $exe.FullName -PassThru
-          if (-not $proc.WaitForExit(150000)) { $proc.Kill(); throw 'Smoke test timed out after 150 s.' }
           $log = Join-Path $env:APPDATA 'PV CrackVision\logs\desktop.log'
+          if (-not $proc.WaitForExit(150000)) { $proc.Kill(); if (Test-Path $log) { Get-Content $log -Tail 80 } else { Write-Host "No desktop.log at $log" }; throw 'Smoke test timed out after 150 s.' }
           if (Test-Path $log) { Get-Content $log -Tail 40 }
           if ($proc.ExitCode -ne 0) { throw "Packaged app smoke test failed (exit code $($proc.ExitCode))." }
 

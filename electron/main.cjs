@@ -244,6 +244,7 @@ if (!gotLock) {
     return startDesktop();
   }).catch((error) => {
     log('Desktop startup failed.', error);
+    if (SMOKE_TEST) { app.exit(1); return; } // v1.4.13.1: never block CI on a modal error dialog
     dialog.showErrorBox(`${PRODUCT_NAME} could not start`, `${error.message || error}\n\nDiagnostic log: ${logFile || 'not created'}`);
     app.quit();
   });
