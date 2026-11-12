@@ -8,6 +8,7 @@
 - **Fix:** restoring a deleted detection no longer deletes the label if that cell has since been re-labelled Cracked.
 - Tests: `server/modelResolver.test.mjs`.
 - **Fix (Windows):** first-launch migration now rebases paths in the job-state JSON correctly on Windows (separators are doubled in JSON and the replacement is JSON-escaped); the worker-path test no longer hard-codes POSIX paths.
+- **Fix (packaged EXE):** esbuild's helper executable is unpacked from the asar and used via `ESBUILD_BINARY_PATH`, so the packaged app can start its TypeScript server (the CI smoke test failed with `spawn ...app.asar\\node_modules\\@esbuild\\win32-x64\\esbuild.exe ENOENT`).
 - **Fix (CI):** `.gitattributes` keeps `resources/models/*` byte-exact; Windows checkout was converting the crack-model JSON to CRLF and failing the manifest size check.
 - **Models included:** `cell.onnx` and `cellCrackModel.user.json` (model version `cell-ensemble-v1.4.13-1-733`) are bundled with a generated `manifest.json`.
 

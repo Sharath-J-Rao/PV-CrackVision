@@ -24,6 +24,11 @@ process.env.PV_CRACKVISION_CONFIG_DIR = USER_DATA_DIR;
 process.env.PV_CRACKVISION_PACKAGED = '1';
 process.env.NODE_ENV = 'production';
 if (app.isPackaged) process.env.PV_BUNDLED_MODELS_DIR = path.join(process.resourcesPath, 'models');
+// v1.4.13.1: the TypeScript loader (tsx -> esbuild) cannot spawn its helper executable from inside app.asar; use the unpacked copy.
+if (app.isPackaged && !process.env.ESBUILD_BINARY_PATH) {
+  const esbuildBin = path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', `@esbuild/${process.platform}-${process.arch}`, process.platform === 'win32' ? 'esbuild.exe' : path.join('bin', 'esbuild'));
+  if (fs.existsSync(esbuildBin)) process.env.ESBUILD_BINARY_PATH = esbuildBin;
+}
 process.env.HOST = '127.0.0.1';
 
 function log(message, error) {

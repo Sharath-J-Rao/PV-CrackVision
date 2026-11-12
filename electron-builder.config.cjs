@@ -39,6 +39,7 @@ module.exports = {
     'node_modules/sharp/**/*',
     'node_modules/@img/**/*',
     'node_modules/onnxruntime-node/**/*',
+    'node_modules/@esbuild/**/*', // v1.4.13.1: the esbuild executable must live outside the asar to be spawned
   ],
   npmRebuild: true,
   nodeGypRebuild: false,
