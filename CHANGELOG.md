@@ -7,6 +7,7 @@
 - **Fix:** deleting a crack you added by hand now also removes its stored "cracked" training label.
 - **Fix:** restoring a deleted detection no longer deletes the label if that cell has since been re-labelled Cracked.
 - Tests: `server/modelResolver.test.mjs`.
+- **Fix (CI):** `.gitattributes` keeps `resources/models/*` byte-exact; Windows checkout was converting the crack-model JSON to CRLF and failing the manifest size check.
 - **Models included:** `cell.onnx` and `cellCrackModel.user.json` (model version `cell-ensemble-v1.4.13-1-733`) are bundled with a generated `manifest.json`.
 
 ## v1.4.12.9 - fewer crack false positives on module edges, Select all / bulk delete for cracks
