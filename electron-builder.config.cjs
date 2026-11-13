@@ -28,6 +28,8 @@ module.exports = {
     '!**/__tests__/**',
     '!**/*.map',
     '!**/__pycache__/**',
+    '!node_modules/onnxruntime-node/bin/napi-v*/darwin/**', // Windows-only app: drop macOS/Linux onnxruntime binaries (~158 MB)
+    '!node_modules/onnxruntime-node/bin/napi-v*/linux/**',
     '!**/*.pyc',
   ],
   // v1.4.13.1: AI models live outside the asar (read by path by onnxruntime) -> <resources>/models, offline and read-only.
