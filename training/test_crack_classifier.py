@@ -1,5 +1,6 @@
 """Unit tests for the pure helpers of train_crack_classifier.py (no torch / ultralytics needed)."""
 import unittest
+from pathlib import Path
 import numpy as np
 from training import train_crack_classifier as t
 
@@ -89,8 +90,8 @@ class TelemetryRegression(unittest.TestCase):
 
     def test_save_dir_prefers_trainer_and_falls_back_to_result(self):
         from types import SimpleNamespace as NS
-        self.assertEqual(str(t.trainer_save_dir(NS(trainer=NS(save_dir="/a")), NS())), "/a")
-        self.assertEqual(str(t.trainer_save_dir(NS(), NS(save_dir="/b"))), "/b")
+        self.assertEqual(Path(t.trainer_save_dir(NS(trainer=NS(save_dir="/a")), NS())), Path("/a"))  # Path: OS-neutral
+        self.assertEqual(Path(t.trainer_save_dir(NS(), NS(save_dir="/b"))), Path("/b"))
         with self.assertRaises(RuntimeError):
             t.trainer_save_dir(NS(), NS())
 
