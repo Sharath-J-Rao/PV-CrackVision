@@ -64,7 +64,8 @@ export async function createCellTrainingDataBundle(
     const image = readImage(record);
     if (!image.length || image.length > 100 * 1024 * 1024) throw new Error(`The source image is missing or too large: ${record.fileName}.`);
     const digest = crypto.createHash('sha1').update(image).digest('hex').slice(0, 20);
-    if (digest.toLowerCase() !== record.imageFile.toLowerCase()) throw new Error(`The source image hash does not match its annotation: ${record.fileName}.`);
+    // imageFile is "<sha1>.img"; digest is the bare hash
+    if (digest.toLowerCase() !== record.imageFile.replace(/\.img$/i, '').toLowerCase()) throw new Error(`The source image hash does not match its annotation: ${record.fileName}.`);
     zip.file(`annotations/images/${record.imageFile}`, image);
     safeRecords.push(record);
   }
@@ -124,7 +125,8 @@ export async function parseCellTrainingDataBundle(buffer: Buffer): Promise<{ man
     uncompressedBytes += bytes.length;
     if (bytes.length > 100 * 1024 * 1024 || uncompressedBytes > MAX_ARCHIVE_BYTES) throw new Error('The expanded backup exceeds the safety limit.');
     const digest = crypto.createHash('sha1').update(bytes).digest('hex').slice(0, 20);
-    if (digest.toLowerCase() !== imageFile.toLowerCase()) throw new Error(`Image integrity check failed for ${imageFile}.`);
+    // imageFile is "<sha1>.img"; digest is the bare hash
+    if (digest.toLowerCase() !== imageFile.replace(/\.img$/i, '').toLowerCase()) throw new Error(`Image integrity check failed for ${imageFile}.`);
     images.set(imageFile, bytes);
   }
   const required = new Set(records.map((record) => record.imageFile));
