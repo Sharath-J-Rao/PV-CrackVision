@@ -10,13 +10,21 @@ if (-not $line) { throw "Could not find a Node.js win-$arch build at $base" }
 $file = ($line -split '\s+')[-1].Trim()
 $root = Split-Path $PSScriptRoot -Parent
 $zip = Join-Path $env:TEMP $file
-$tmp = Join-Path $root '.node_tmp'
+# v1.4.15.0: extract in a SHORT temp path (the project folder can be deeply nested; Windows PowerShell's Expand-Archive
+# fails past 260 characters), then copy with robocopy, which handles long paths.
+$tmp = Join-Path $env:TEMP ('pvcv_node_' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 Write-Host "Downloading $file (one time, ~30 MB)..."
 Invoke-WebRequest "$base/$file" -OutFile $zip -UseBasicParsing
-if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
-Expand-Archive $zip -DestinationPath $tmp -Force
-if (Test-Path "$root\.node") { Remove-Item "$root\.node" -Recurse -Force }
-Move-Item (Get-ChildItem $tmp -Directory | Select-Object -First 1).FullName "$root\.node"
-Remove-Item $tmp -Recurse -Force
-Remove-Item $zip -Force
+New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+$tar = Join-Path $env:SystemRoot 'System32\tar.exe'
+if (Test-Path $tar) { & $tar -xf $zip -C $tmp; if ($LASTEXITCODE -ne 0) { throw "tar extraction failed ($LASTEXITCODE)" } }
+else { Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $tmp) }
+$extracted = (Get-ChildItem -LiteralPath $tmp -Directory | Select-Object -First 1).FullName
+if (-not $extracted) { throw 'The Node.js archive was empty.' }
+$dest = Join-Path $root '.node'
+if (Test-Path -LiteralPath $dest) { & cmd /c rmdir /s /q "`"$dest`"" }
+& robocopy $extracted $dest /E /NFL /NDL /NJH /NJS /NP | Out-Null
+if ($LASTEXITCODE -ge 8) { throw "Copying Node.js into the project folder failed (robocopy $LASTEXITCODE). Move the project to a shorter path such as D:\PVCV and run again." }
+Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
 Write-Host "Node.js ready in .node"

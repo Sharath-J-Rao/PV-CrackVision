@@ -1,0 +1,16 @@
+{
+  "modelVersion": "cell-ensemble-v1.4.15-0-20261113",
+  "minAppVersion": "1.4.15-0",
+  "generatedAt": "2026-11-13T04:23:26.487Z",
+  "files": {
+    "cell.onnx": {
+      "sha256": "0360cc2f8592dcb3664a9ed9f5a6d4209f9b8cf2f7c6e8c146bb4005ab27fdb3",
+      "size": 11967837
+    },
+    "cellCrackModel.user.json": {
+      "sha256": "f68b2fe9e7fde7bb5582949a74ab04b316a0fb1b52a8ea8ad75148e38498cd2a",
+      "size": 1240939,
+      "schema": "cell-level-v2"
+    }
+  }
+}

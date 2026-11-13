@@ -1,9 +1,15 @@
 import sharp from 'sharp';
+import { detectCellBoxes, registerClassicalCellProvider, type ScoredPixelBox } from './cellDetector.ts';
+import { cellGridBounds, isGridEdgeCell } from './cellPriority.ts';
+import { applyYoloCellsToRegions, normalizeReviewedCellBoxes, type ReviewedCellInput } from './cellDetectionGeometry.ts';
+import { estimateCellAxisPitchCandidates, type CellAxisCandidate } from './cellPitch.ts';
 import { buildValidatedCellGeometry } from './cellGeometry.ts';
 import ExifReader from 'exifreader';
 import { lookupMetadata } from './metadataStore.ts';
-import { loadCrackModel, scanForEdgeWebs, nmsWindows } from './crackModel.ts';
-import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import { getTrainingSettings } from './trainingSettings.ts';
+import { loadCrackModel, extractCellSample, scoreCellDetailed } from './crackModel.ts';
+import { loadCellClassifier, classifyCells, classifyCellViews, TTA_VIEWS } from './cellClassifier.ts';
+import { detectModuleCracks, shadowFlagsCell, type ShadowBox } from './moduleShadow.ts';
 import type {
   BoundingBox,
   CentroidMethod,
@@ -47,150 +53,6 @@ export function epsg3857ToLonLat(x: number, y: number): [number, number] {
   const lat = (2 * Math.atan(Math.exp(y / EARTH_RADIUS_M)) - Math.PI / 2) * (180 / Math.PI);
   return [Number(lon.toFixed(8)), Number(lat.toFixed(8))];
 }
-
-// Returns null when no usable key -> pipeline falls back to classical-only (offline) detection
-function getGenAIClient(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY?.trim();
-  const placeholder = !apiKey || /^MY_GEMINI_API_KEY$/i.test(apiKey);
-  if (placeholder || process.env.CV_ENGINE === 'classical') return null;
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
-}
-
-// Model names are env-overridable instead of hard-coded
-const PRIMARY_MODEL = process.env.GEMINI_PRIMARY_MODEL || 'gemini-3.8-flash';
-const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.1-flash-lite';
-
-// Quota-exhausted models are skipped until the next UTC day (was: forever)
-const dailyExhaustedModels = new Set<string>();
-let exhaustedDay = new Date().toISOString().slice(0, 10);
-function resetExhaustedIfNewDay(): void {
-  const today = new Date().toISOString().slice(0, 10);
-  if (today !== exhaustedDay) {
-    dailyExhaustedModels.clear();
-    exhaustedDay = today;
-  }
-}
-
-const detectionItemSchema = {
-  type: Type.OBJECT,
-  properties: {
-    category: {
-      type: Type.STRING,
-      description:
-        'Must be one of: spider_web_crack, impact_point, linear_fracture, surface_residue',
-    },
-    isEdgeCrack: {
-      type: Type.BOOLEAN,
-      description:
-        'True only if the fracture touches the outermost solar-cell row/column or array frame; interior-cell fractures must be false.',
-    },
-    edgeSide: {
-      type: Type.STRING,
-      description:
-        'One of: bottom-left, top-left, bottom-right, top-right, left-edge, right-edge, top-edge, bottom-edge, interior',
-    },
-    severity: {
-      type: Type.STRING,
-      description: 'Must be one of: critical, moderate, minor, informational',
-    },
-    confidence: {
-      type: Type.NUMBER,
-      description: 'Confidence score between 0.50 and 0.99',
-    },
-    title: {
-      type: Type.STRING,
-      description:
-        'Concise technical defect label identifying the affected solar cell(s), e.g. Interior Solar-Cell Hairline Fracture or Edge-Originated Spider-Web Glass Crack.',
-    },
-    description: {
-      type: Type.STRING,
-      description:
-        '1-2 sentence empirical description of the spider-web hairline fracture arcs, edge origin, affected cell columns/rows, or surface anomaly.',
-    },
-    radialBranches: {
-      type: Type.INTEGER,
-      description:
-        'Count of visible sweeping fracture arcs or branching filaments (e.g. 2..14 for spider_web_crack).',
-    },
-    pointY: {
-      type: Type.INTEGER,
-      description:
-        'Normalized 0..1000 Y coordinate of the primary crack nexus or edge initiation point within that tile.',
-    },
-    pointX: {
-      type: Type.INTEGER,
-      description:
-        'Normalized 0..1000 X coordinate of the primary crack nexus or edge initiation point within that tile.',
-    },
-    ymin: {
-      type: Type.INTEGER,
-      description: 'Top bounding box edge normalized 0..1000 in that tile.',
-    },
-    xmin: {
-      type: Type.INTEGER,
-      description: 'Left bounding box edge normalized 0..1000 in that tile.',
-    },
-    ymax: {
-      type: Type.INTEGER,
-      description: 'Bottom bounding box edge normalized 0..1000 in that tile.',
-    },
-    xmax: {
-      type: Type.INTEGER,
-      description: 'Right bounding box edge normalized 0..1000 in that tile.',
-    },
-  },
-  required: [
-    'category',
-    'isEdgeCrack',
-    'edgeSide',
-    'severity',
-    'confidence',
-    'title',
-    'description',
-    'radialBranches',
-    'pointY',
-    'pointX',
-    'ymin',
-    'xmin',
-    'ymax',
-    'xmax',
-  ],
-};
-
-const tileDetectionSchema = {
-  type: Type.OBJECT,
-  properties: {
-    tileResults: {
-      type: Type.ARRAY,
-      description:
-        'One inspection result object per provided TILE_INDEX (0 through N-1), in order.',
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          tileIndex: {
-            type: Type.INTEGER,
-            description: '0-based TILE_INDEX of the inspected tile.',
-          },
-          detections: {
-            type: Type.ARRAY,
-            description:
-              'All spider-web cracks (both wide sweeping arcs AND single-column/multi-column border-cell spider-web networks near left/right/top/bottom edges), impact pits, linear fractures, or surface residue visible in this tile.',
-            items: detectionItemSchema,
-          },
-        },
-        required: ['tileIndex', 'detections'],
-      },
-    },
-  },
-  required: ['tileResults'],
-};
 
 function parseXmpFloat(val: unknown): number | null {
   if (val === null || val === undefined) return null;
@@ -487,7 +349,7 @@ interface DownsampledAnalysis {
 
 /**
  * Neutralizes saturated user annotation lines (blue/red/green boxes) so neither classical CV
- * nor VLM is blinded or distracted by drawn markup.
+ * nor the detectors are blinded or distracted by drawn markup.
  */
 function sanitizeUserMarkupRgb(
   r: number,
@@ -538,81 +400,6 @@ function buildSolarCellDirectionalEdgeMaps(
     }
   }
   return { vertical, horizontal };
-}
-
-interface CellAxisCandidate {
-  pitch: number;
-  confidence: number;
-}
-
-/** Return several real periodicity peaks so the two axes can be resolved together. */
-function estimateCellAxisPitchCandidates(profile: Float32Array): CellAxisCandidate[] {
-  const n = profile.length;
-  if (n < 36) return [];
-
-  const smooth = new Float32Array(n);
-  let mean = 0;
-  let maxValue = 0;
-  for (let i = 0; i < n; i++) {
-    const value = (
-      profile[Math.max(0, i - 1)] +
-      profile[i] +
-      profile[Math.min(n - 1, i + 1)]
-    ) / 3;
-    smooth[i] = value;
-    mean += value;
-    if (value > maxValue) maxValue = value;
-  }
-  mean /= n;
-  if (maxValue - mean < 0.025) return [];
-
-  const centered = new Float32Array(n);
-  for (let i = 0; i < n; i++) centered[i] = smooth[i] - mean;
-
-  const minLag = Math.max(6, Math.round(n * 0.015));
-  const maxLag = Math.min(Math.floor(n / 3), Math.round(n * 0.36));
-  const correlations: number[] = new Array(maxLag + 1).fill(-1);
-  let best = -1;
-  for (let lag = minLag; lag <= maxLag; lag++) {
-    let dot = 0;
-    let aa = 0;
-    let bb = 0;
-    for (let i = 0; i < n - lag; i++) {
-      const a = centered[i];
-      const b = centered[i + lag];
-      dot += a * b;
-      aa += a * a;
-      bb += b * b;
-    }
-    const correlation = dot / (Math.sqrt(aa * bb) + 1e-8);
-    correlations[lag] = correlation;
-    if (correlation > best) best = correlation;
-  }
-  if (best < 0.12) return [];
-
-  const peaks: CellAxisCandidate[] = [];
-  for (let lag = minLag + 1; lag < maxLag; lag++) {
-    const score = correlations[lag];
-    if (
-      score >= best * 0.52 &&
-      score >= correlations[lag - 1] &&
-      score >= correlations[lag + 1]
-    ) {
-      peaks.push({ pitch: lag, confidence: Math.max(0, Math.min(1, score)) });
-    }
-  }
-
-  // Keep distinct local maxima; a true cell pitch and its harmonic (2x, 3x) remain
-  // available for joint selection, while adjacent one-pixel maxima are collapsed.
-  peaks.sort((a, b) => b.confidence - a.confidence);
-  const selected: CellAxisCandidate[] = [];
-  for (const candidate of peaks) {
-    if (selected.every((existing) => Math.abs(existing.pitch - candidate.pitch) >= 3)) {
-      selected.push(candidate);
-    }
-    if (selected.length >= 12) break;
-  }
-  return selected;
 }
 
 /**
@@ -717,6 +504,11 @@ function estimateSolarCellGrid(
     confidence = Math.min(whiteX.confidence, whiteY.confidence);
     method = 'gridline-periodicity';
   }
+
+  // Do not let optional pitch estimates leak into geometry arithmetic. Both axes must
+  // have finite positive measurements after the local gridline fallback has run.
+  if (pitchX === undefined || pitchY === undefined || !Number.isFinite(pitchX) ||
+      !Number.isFinite(pitchY) || pitchX <= 0 || pitchY <= 0) return undefined;
 
   // Re-check that the shared pitch is actually present in this local band. A band
   // with weak local edge evidence is omitted rather than forcing the frame pitch onto it.
@@ -1253,6 +1045,7 @@ export async function runClassicalStage1(
     }
   }
 
+
   if (moduleRegions.length === 0) {
     pvMask.fill(1);
     moduleRegions.push({
@@ -1657,10 +1450,10 @@ async function extractForensicPatchPair(
   const pad = Math.max(45, Math.round(Math.max(pixelBox.width, pixelBox.height) * 0.35));
   const cx = pixelBox.left + pixelBox.width / 2;
   const cy = pixelBox.top + pixelBox.height / 2;
-  const side = Math.min(
+  const side = Math.round(Math.min(
     Math.min(imgWidth, imgHeight),
     Math.max(150, Math.max(pixelBox.width, pixelBox.height) + pad * 2)
-  );
+  )); // sharp.extract needs integers
 
   const left = Math.max(0, Math.min(imgWidth - side, Math.round(cx - side / 2)));
   const top = Math.max(0, Math.min(imgHeight - side, Math.round(cy - side / 2)));
@@ -1776,10 +1569,13 @@ async function detectClassicalModuleSpiderWebs(
     const mw = Math.max(96, Math.round(mb.width * modScale));
     const mh = Math.max(64, Math.round(mb.height * modScale));
 
+    const ex = Math.max(0, Math.floor(mb.left)), ey = Math.max(0, Math.floor(mb.top)); // clamp: sharp.extract throws on OOB/float
+    const ew = Math.min(imgWidth, Math.ceil(mb.left + mb.width)) - ex, eh = Math.min(imgHeight, Math.ceil(mb.top + mb.height)) - ey;
+    if (ew < 8 || eh < 8) continue;
     const { data: modBuf } = await sharp(rawRgb, {
       raw: { width: imgWidth, height: imgHeight, channels: 3 },
     })
-      .extract(mb)
+      .extract({ left: ex, top: ey, width: ew, height: eh })
       .resize(mw, mh, { fit: 'fill', kernel: 'lanczos3' })
       .raw()
       .toBuffer({ resolveWithObject: true });
@@ -1988,52 +1784,41 @@ async function detectClassicalModuleSpiderWebs(
           (cluster.length >= 2 && peakDensity > Math.max(medDensity * 3.8, 0.115)) ||
           (cluster.length === 1 && peakDensity > Math.max(medDensity * 5.0, 0.16));
         if (qualifies) {
-          const clusterBoxes = cluster
-            .map(([cr, cc]) => cellBoxes.get(cr * nCols + cc))
-            .filter((box): box is PixelBox => Boolean(box));
-          if (!clusterBoxes.length) continue;
-          const pLeft = Math.min(...clusterBoxes.map((box) => box.left));
-          const pTop = Math.min(...clusterBoxes.map((box) => box.top));
-          const pRight = Math.max(...clusterBoxes.map((box) => box.left + box.width));
-          const pBottom = Math.max(...clusterBoxes.map((box) => box.top + box.height));
-          const pBox: PixelBox = {
-            left: Math.max(0, pLeft),
-            top: Math.max(0, pTop),
-            width: Math.max(1, pRight - pLeft),
-            height: Math.max(1, pBottom - pTop),
-          };
-          const ptX = Math.round(pBox.left + pBox.width / 2);
-          const ptY = Math.round(pBox.top + pBox.height / 2);
-          const edgeMeta = normalizeEdgeSide('interior', false, pBox, moduleRegions);
-          const loc = resolveModuleAndCell(ptX, ptY, moduleRegions, imgWidth, imgHeight);
-          const conf = Number(
-            Math.min(0.95, 0.74 + Math.min(0.21, (peakDensity - anomThresh) * 2.2)).toFixed(2)
-          );
-
-          found.push({
-            id: `CV-M${mIdx + 1}-${found.length + 1}`,
-            category: 'spider_web_crack',
-            isEdgeCrack: edgeMeta.isEdgeCrack,
-            edgeSide: edgeMeta.edgeSide,
-            severity: cluster.length >= 3 ? 'critical' : 'moderate',
-            confidence: conf,
-            title: 'Solar-Cell Spider-Web Glass Fracture Network',
-            description: `Multi-branch off-axis glass-fracture pattern detected across ${cluster.length} solar cell${cluster.length > 1 ? 's' : ''} (${edgeMeta.edgeSide}) using ${cellGrid.cells.length} individually validated solar cells.`,
-            moduleIndex: loc.moduleIndex,
-            cellLocation: loc.cellLocation,
-            radialBranches: Math.min(12, Math.max(3, cluster.length + 2)),
-            estimatedDiameterMm: Math.round(Math.max(pBox.width, pBox.height) * gsdMmPerPx),
-            pointPx: { x: ptX, y: ptY },
-            box: {
-              xmin: pBox.left / imgWidth,
-              ymin: pBox.top / imgHeight,
-              xmax: (pBox.left + pBox.width) / imgWidth,
-              ymax: (pBox.top + pBox.height) / imgHeight,
-            },
-            pixelBox: pBox,
-            tileId: `M${mIdx + 1}-CLASSICAL`,
-            offAxisEdgeScore: Number((peakDensity * 100).toFixed(2)),
-          });
+          for (const [cr, cc] of cluster) {
+            const cellIndex = cr * nCols + cc;
+            const pBox = cellBoxes.get(cellIndex);
+            if (!pBox) continue;
+            const ptX = Math.round(pBox.left + pBox.width / 2);
+            const ptY = Math.round(pBox.top + pBox.height / 2);
+            const edgeMeta = normalizeEdgeSide('interior', false, pBox, moduleRegions);
+            const loc = resolveModuleAndCell(ptX, ptY, moduleRegions, imgWidth, imgHeight);
+            const density = cellDensity[cellIndex];
+            const conf = Number(Math.min(0.98, 0.70 + Math.min(0.28, Math.max(0, density - anomThresh) * 2.0)).toFixed(2));
+            found.push({
+              id: `CV-M${mIdx + 1}-R${cr + 1}C${cc + 1}`,
+              category: 'spider_web_crack',
+              isEdgeCrack: edgeMeta.isEdgeCrack,
+              edgeSide: edgeMeta.edgeSide,
+              severity: density > Math.max(medDensity * 5, 0.16) ? 'critical' : 'moderate',
+              confidence: conf,
+              title: 'Solar-Cell Spider-Web Glass Fracture',
+              description: `Cell-level off-axis fracture response detected in ${loc.cellLocation} using validated PV-cell geometry.`,
+              moduleIndex: loc.moduleIndex,
+              cellLocation: loc.cellLocation,
+              radialBranches: Math.min(12, Math.max(3, Math.round(density * 100))),
+              estimatedDiameterMm: Math.round(Math.max(pBox.width, pBox.height) * gsdMmPerPx),
+              pointPx: { x: ptX, y: ptY },
+              box: {
+                xmin: pBox.left / imgWidth,
+                ymin: pBox.top / imgHeight,
+                xmax: (pBox.left + pBox.width) / imgWidth,
+                ymax: (pBox.top + pBox.height) / imgHeight,
+              },
+              pixelBox: pBox,
+              tileId: `M${mIdx + 1}-CELL-R${cr + 1}C${cc + 1}`,
+              offAxisEdgeScore: Number((density * 100).toFixed(2)),
+            });
+          }
         }
       }
     }
@@ -2042,12 +1827,8 @@ async function detectClassicalModuleSpiderWebs(
   return found;
 }
 
-// Ground gate thresholds (fractions of the detection box, measured on the downsampled stage-1 masks)
-const GROUND_MAX_SOIL_FRAC = 0.3;
-const GROUND_MIN_PV_FRAC = 0.5;
-const GROUND_MIN_PV_FRAC_FALLBACK = 0.25;
-// Learned detector: at most this many windows per image after merging neighbours (best probability first)
-const MAX_LEARNED_PER_IMAGE = 8;
+// Ground gate thresholds (fractions of the detection box, measured on the downsampled stage-1 masks).
+// v1.4.7.0: read from the persisted Training Settings (defaults 0.3 / 0.5 / 0.25 equal the former constants).
 
 /**
  * Vetoes detections that sit on ground: centre must be inside a detected module, the box is clipped to the
@@ -2058,10 +1839,18 @@ export function applyGroundGate(
   pBox: PixelBox,
   stage1: DownsampledAnalysis,
   imgWidth: number,
-  imgHeight: number
+  imgHeight: number,
+  /** v1.4.11.2: true when cells come from the operator's Cell Annotation boxes or the YOLO cell detector. */
+  trustConfirmedCells = false
 ): PixelBox | null {
   const cx = pBox.left + pBox.width / 2;
   const cy = pBox.top + pBox.height / 2;
+  // A confirmed cell is explicit evidence of PV; the coarse soil/PV colour mask must not overrule it (that wrongly
+  // dropped real cracks on dark/dirty cells and on cells outside the automatically located panels).
+  if (trustConfirmedCells && stage1.moduleRegions.some((m) => m.cellGrid?.cells.some((cell) => {
+    const b = cell.pixelBox;
+    return cx >= b.left && cx <= b.left + b.width && cy >= b.top && cy <= b.top + b.height;
+  }))) return pBox;
   const mod = stage1.moduleRegions.find((m) => {
     const b = m.pixelBox;
     return cx >= b.left && cx <= b.left + b.width && cy >= b.top && cy <= b.top + b.height;
@@ -2095,19 +1884,30 @@ export function applyGroundGate(
     }
   }
   if (total === 0) return null;
-  if (soil / total > GROUND_MAX_SOIL_FRAC) return null;
+  const gate = getTrainingSettings().crackDetection;
+  if (soil / total > gate.groundMaxSoilFraction) return null;
   // Real module: >= 50% silicon. Whole-image fallback (no module localised): only accept close-up crops that are
   // clearly mostly PV (>= 25%); otherwise a ground-only frame would pass the gate and soil would be reported.
-  if (pv / total < (mod.isFallback ? GROUND_MIN_PV_FRAC_FALLBACK : GROUND_MIN_PV_FRAC)) return null;
+  if (pv / total < (mod.isFallback ? gate.groundMinPvFractionFallback : gate.groundMinPvFraction)) return null;
   return box;
 }
 
-/**
- * Learned detector: scores canonical-scale edge-ring windows of every detected module with the trained hairline-crack
- * model (server/models/crackModel.json). Windows already exclude ground (inner-frame box + warm/soil gate, see
- * crackModel.ts) and are ground-gated again by the caller. Returns [] when the model file is absent so the classical
- * detector keeps working unchanged.
- */
+/** v1.4.10: classical fallback for Cell Detection - cells of the edge-periodicity grid as scored boxes. */
+async function classicalCellBoxes(rgb: Buffer, width: number, height: number): Promise<ScoredPixelBox[]> {
+  const stage = await runClassicalStage1(rgb, width, height);
+  const out: ScoredPixelBox[] = [];
+  for (const region of stage.moduleRegions) {
+    if (region.isFallback || !region.cellGrid) continue;
+    for (const cell of region.cellGrid.cells) {
+      if (cell.pixelBox.width < 8 || cell.pixelBox.height < 8) continue;
+      out.push({ ...cell.pixelBox, confidence: Math.max(0.01, Math.min(1, cell.confidence || region.cellGrid.confidence || 0.5)) });
+    }
+  }
+  return out;
+}
+registerClassicalCellProvider(classicalCellBoxes);
+
+/** Learned detector: scores each individually validated cell crop with the user's fresh cell-level model. */
 async function detectLearnedEdgeCracks(
   rawRgb: Buffer,
   imgWidth: number,
@@ -2115,45 +1915,106 @@ async function detectLearnedEdgeCracks(
   moduleRegions: ModuleRegion[],
   gsdMmPerPx: number
 ): Promise<DetectedAnomaly[]> {
-  const model = loadCrackModel();
-  if (!model) return [];
-  const boxes = moduleRegions
-    .filter((m) => !m.isFallback && m.pixelBox.width >= 180 && m.pixelBox.height >= 110)
-    .map((m) => m.pixelBox);
-  if (!boxes.length) return [];
-  let hits;
-  try {
-    ({ hits } = await scanForEdgeWebs(rawRgb, imgWidth, imgHeight, boxes, model));
-  } catch (err) {
-    // A scan failure must never lose the classical result for this image
-    console.warn('Learned crack scan failed:', err instanceof Error ? err.message : err);
-    return [];
+  // v1.4.14: the pretrained crop classifier decides; the legacy boosted-tree/CNN model is used ONLY while no classifier is installed.
+  const classifier = await loadCellClassifier();
+  const model = classifier ? null : loadCrackModel();
+  if (!classifier && !model) return [];
+  const cells = moduleRegions
+    .filter((region) => (!region.isFallback || region.cellGrid?.method === 'yolo-cell-detection') && region.cellGrid && region.cellGrid.confidence >= 0.2)
+    .flatMap((region) => (region.cellGrid?.cells ?? []).map((cell) => ({ region, cell })))
+    .filter(({ cell }) => cell.pixelBox.width >= 8 && cell.pixelBox.height >= 8);
+  if (!cells.length) return [];
+
+  // Option B (shadow): started FIRST so the tiled detector runs concurrently with A's scoring (wall time ~ max instead of sum). A failure here
+  // must never affect the reported result, so the promise resolves to null instead of rejecting.
+  const shadowPromise: Promise<ShadowBox[] | null> = getTrainingSettings().crackNet.shadowEnabled
+    ? detectModuleCracks(rawRgb, imgWidth, imgHeight).catch((error) => { console.warn(`[Module shadow] skipped: ${error instanceof Error ? error.message : error}`); return null; })
+    : Promise.resolve(null);
+  // One scored entry per usable cell, whichever engine produced it, so the decision loop below exists exactly once.
+  const extracted: Array<{ region: ModuleRegion; cell: NonNullable<ModuleRegion['cellGrid']>['cells'][number]; probability: number; parts: number[] }> = [];
+  if (classifier) {
+    const probabilities = await classifyCells(rawRgb, imgWidth, imgHeight, cells.map(({ cell }) => cell.pixelBox), classifier);
+    cells.forEach(({ region, cell }, i) => { if (probabilities[i] >= 0) extracted.push({ region, cell, probability: probabilities[i], parts: [probabilities[i]] }); });
+  } else if (model) {
+    // Legacy path (unchanged from v1.4.13.1): shared extraction with the old trainer, bounded parallel crops to limit native-memory spikes.
+    for (let offset = 0; offset < cells.length; offset += 24) {
+      const batch = cells.slice(offset, offset + 24);
+      const values = await Promise.all(batch.map(async ({ region, cell }) => {
+        try {
+          const sample = await extractCellSample(rawRgb, imgWidth, imgHeight, cell.pixelBox, {
+            window: model.window, margin: model.margin, rich: model.schema === 'cell-level-v2', cnn: Boolean(model.cnn), buffer: model.cellBuffer ?? 0,
+          });
+          const { probability, parts } = scoreCellDetailed(model, sample.features, sample.cnn);
+          return { region, cell, probability, parts };
+        } catch { return null; }
+      }));
+      for (const value of values) if (value) extracted.push(value);
+    }
   }
-  const kept = nmsWindows(hits).slice(0, MAX_LEARNED_PER_IMAGE);
+  const shadow = await shadowPromise;
+  if (!extracted.length) return [];
+
   const found: DetectedAnomaly[] = [];
-  for (const h of kept) {
-    const pBox: PixelBox = {
-      left: Math.max(0, h.x),
-      top: Math.max(0, h.y),
-      width: Math.min(h.size, imgWidth - Math.max(0, h.x)),
-      height: Math.min(h.size, imgHeight - Math.max(0, h.y)),
-    };
+  const perimeterIds = new Set<string>();
+  const trainingSettings = getTrainingSettings();
+  const priority = trainingSettings.crackClassifier; // v1.4.10: module-perimeter cells get a lower decision threshold
+  // v1.4.12.7 hotfix: operator-set crack decision threshold; 0 keeps the threshold tuned during training.
+  const decisionThreshold = trainingSettings.crackDetection.decisionThreshold > 0 ? trainingSettings.crackDetection.decisionThreshold : (classifier?.meta.threshold ?? model!.threshold);
+  const usedIds = new Set<string>(); // v1.4.9: reviewed cells can share a row/column slot, ids must stay unique
+  // v1.4.12.9: the "edge" is the outer ring of the DETECTED cell grid (per module), not the looser module-region outline, which
+  // also covered the frame, the gap to the next module row and the second cell row, all common false-positive sources.
+  const cellsByRegion = new Map<string, PixelBox[]>();
+  for (const { region, cell } of extracted) {
+    const list = cellsByRegion.get(region.id);
+    if (list) list.push(cell.pixelBox); else cellsByRegion.set(region.id, [cell.pixelBox]);
+  }
+  const gridByRegion = new Map<string, PixelBox | null>([...cellsByRegion].map(([id, boxes]) => [id, cellGridBounds(boxes)]));
+  const edgeThreshold = Math.max(0.05, decisionThreshold - priority.edgeThresholdDrop);
+  // v1.4.14.5 accuracy: only cells that could be reported (>= the lowest threshold in play) are re-scored on h/v/hv-flipped views. The final score is
+  // the mean of the 4 views, and `parts` becomes the 4 views so the existing outer-ring rule requires EVERY view to clear the relaxed threshold.
+  // A failure keeps the single-view score. Cost: 3 extra inferences on the few candidate cells only.
+  if (classifier && trainingSettings.crackNet.candidateTta) {
+    const candidates = extracted.filter((entry) => entry.probability >= edgeThreshold);
+    if (candidates.length) {
+      try {
+        const views = await classifyCellViews(rawRgb, imgWidth, imgHeight, candidates.map((entry) => entry.cell.pixelBox), classifier, TTA_VIEWS);
+        candidates.forEach((entry, i) => {
+          if (views[i].some((p) => p < 0)) return; // an unusable flipped crop must not silently lower the score
+          entry.parts = [entry.probability, ...views[i]];
+          entry.probability = entry.parts.reduce((a, b) => a + b, 0) / entry.parts.length;
+        });
+      } catch (error) { console.warn(`[Cell classifier] flip re-check skipped: ${error instanceof Error ? error.message : error}`); }
+    }
+  }
+  for (const entry of extracted) {
+    const { region, cell, probability, parts } = entry;
+    const perimeter = !region.isFallback && isGridEdgeCell(cell.pixelBox, gridByRegion.get(region.id));
+    if (probability < (perimeter ? edgeThreshold : decisionThreshold)) continue;
+    // Outer-ring cells already get the relaxed threshold, so they must be backed by every classifier component (boosting AND CNN),
+    // not just a high average that one confident component can produce on a gap/frame/busbar look-alike. Single-component models are unaffected.
+    if (perimeter && priority.edgeRequireAgreement && parts.some((part) => part < edgeThreshold)) continue;
+    const pBox = cell.pixelBox;
     const ptX = Math.round(pBox.left + pBox.width / 2);
     const ptY = Math.round(pBox.top + pBox.height / 2);
     const edgeMeta = normalizeEdgeSide('interior', false, pBox, moduleRegions);
-    const loc = resolveModuleAndCell(ptX, ptY, moduleRegions, imgWidth, imgHeight);
-    if (!loc.cellLocation.startsWith('Cell R')) continue;
+    let anomalyId = `CELL-ML-${region.id}-R${cell.row}C${cell.column}`;
+    for (let n = 2; usedIds.has(anomalyId); n++) anomalyId = `CELL-ML-${region.id}-R${cell.row}C${cell.column}-${n}`;
+    usedIds.add(anomalyId);
+    if (perimeter) perimeterIds.add(anomalyId);
     found.push({
-      id: `ML-${found.length + 1}`,
+      id: anomalyId,
       category: 'spider_web_crack',
       isEdgeCrack: edgeMeta.isEdgeCrack,
       edgeSide: edgeMeta.edgeSide,
-      severity: h.prob >= 0.95 ? 'critical' : 'moderate',
-      confidence: Number(Math.min(0.95, 0.5 + 0.45 * h.prob).toFixed(2)),
-      title: 'Edge Hairline Fracture (learned)',
-      description: `Trained window classifier flagged hairline fractures at the module edge (p=${h.prob.toFixed(2)}, model ${model.version}).`,
-      moduleIndex: loc.moduleIndex,
-      cellLocation: loc.cellLocation,
+      severity: probability >= 0.9 ? 'critical' : 'moderate',
+      confidence: Number(probability.toFixed(3)),
+      title: 'Solar-Cell Crack (trained cell classifier)',
+      description: `Cell-level classifier score ${probability.toFixed(3)} from one validated cell crop (${classifier ? `pretrained classifier ${classifier.meta.version}` : `legacy ${model!.algorithm ?? 'logistic'} model ${model!.version}`}).`,
+      outerRing: perimeter,
+      engine: classifier ? 'classifier' : 'legacy',
+      ...(shadow ? { shadowAgree: shadowFlagsCell(shadow, pBox) } : {}),
+      moduleIndex: region.label,
+      cellLocation: `Cell R${cell.row} · C${cell.column}`,
       radialBranches: 4,
       estimatedDiameterMm: Math.round(Math.max(pBox.width, pBox.height) * gsdMmPerPx),
       pointPx: { x: ptX, y: ptY },
@@ -2164,11 +2025,16 @@ async function detectLearnedEdgeCracks(
         ymax: (pBox.top + pBox.height) / imgHeight,
       },
       pixelBox: pBox,
-      tileId: 'ML-WINDOW',
-      offAxisEdgeScore: Number((h.prob * 100).toFixed(2)),
+      tileId: `CELL-${region.id}-R${cell.row}C${cell.column}`,
+      offAxisEdgeScore: Number((probability * 100).toFixed(2)),
     });
   }
-  return found;
+  if (shadow) { // informational: how often the tiled detector agrees, and what it alone found
+    const unmatched = shadow.filter((b) => !found.some((f) => shadowFlagsCell([b], f.pixelBox))).length;
+    console.log(`[Module shadow] classifier ${found.length} crack(s); detector agrees on ${found.filter((f) => f.shadowAgree).length}; detector-only boxes ${unmatched}.`);
+  }
+  // Perimeter-priority: module-edge cells are reported first, then by score.
+  return found.sort((a, b) => Number(perimeterIds.has(b.id)) - Number(perimeterIds.has(a.id)) || b.confidence - a.confidence);
 }
 
 function computeIoU(a: BoundingBox, b: BoundingBox): number {
@@ -2294,7 +2160,7 @@ function resolveModuleAndCell(
     });
     if (cell) {
       return {
-        moduleIndex: 'Visible solar-cell field',
+        moduleIndex: mod.label,
         cellLocation: `Cell R${cell.row} · C${cell.column}`,
       };
     }
@@ -2468,24 +2334,24 @@ export function buildGeoJsonFeatureCollection(
   };
 }
 
+export interface AnalyzeOptions {
+  runDirectCellDetection?: boolean;
+  reviewedCells?: ReviewedCellInput;
+}
+
 export async function analyzeInspectionImage(
   imageBuffer: Buffer,
   fileName: string,
   config: InspectionConfig,
-  includePreviewDataUrl = false
+  includePreviewDataUrl = false,
+  options: AnalyzeOptions = {},
 ): Promise<InspectionResult> {
   const startTime = Date.now();
-  const ai = getGenAIClient(); // null => offline classical-only mode
   const warnings: string[] = [];
-  if (!ai) {
-    warnings.push(
-      'Gemini unavailable (no GEMINI_API_KEY or CV_ENGINE=classical): ran offline classical detector only; impact/linear/residue categories are not reported.'
-    );
-  }
-
   const metaProbe = await sharp(imageBuffer).rotate().metadata();
-  const origW = metaProbe.width || 1920;
-  const origH = metaProbe.height || 1080;
+  const swapXY = (metaProbe.orientation ?? 1) >= 5; // metadata() reports pre-EXIF-rotation dims
+  const origW = (swapXY ? metaProbe.height : metaProbe.width) || 1920;
+  const origH = (swapXY ? metaProbe.width : metaProbe.height) || 1080;
   const maxNativeDim = 8000;
   const nativeScale = Math.min(1, maxNativeDim / Math.max(origW, origH));
   const reqWidth = Math.max(32, Math.round(origW * nativeScale));
@@ -2523,11 +2389,51 @@ export async function analyzeInspectionImage(
     rawRgb = stripped;
   }
 
-  // Stage 1: cell-bearing surface localization + edge-pitch solar-cell grid + crack-response map
-  const stage1 = await runClassicalStage1(rawRgb, imgWidth, imgHeight);
-  const lowConfidenceCellGrids = stage1.moduleRegions.filter(
-    (region) => !region.isFallback && (region.cellGrid?.confidence ?? 0) < 0.25
-  );
+  // Stage 1: cell-bearing surface localization + edge-pitch solar-cell grid + crack-response map.
+  // Cell localization is an explicit first-stage workflow. The crack-analysis pass can
+  // disable direct YOLO inference so it never silently re-runs the cell detector.
+  const cellDetection: Awaited<ReturnType<typeof detectCellBoxes>> = options.runDirectCellDetection === false
+    ? { boxes: [], source: 'classical' as const }
+    : await detectCellBoxes(rawRgb, imgWidth, imgHeight).catch((error: unknown) => ({ boxes: [], source: 'yolo11n' as const, warning: `YOLO cell inference failed before output decoding; classical auto-detection was not run. ${error instanceof Error ? error.message : 'Unknown inference error.'}` }));
+  if (cellDetection.warning) warnings.push(`Cell detector note: ${cellDetection.warning}`);
+  let stage1 = await runClassicalStage1(rawRgb, imgWidth, imgHeight);
+  // Which cells drive the crack classifier: 'reviewed-cells' (Cell Annotation boxes), 'yolo-cells' (direct YOLO in this pass)
+  // or 'classical-grid' (edge-periodicity fallback). Reported on the result so the UI can show the data flow honestly.
+  let cellBasis: NonNullable<InspectionResult['cellBasis']> = 'classical-grid';
+  const reviewed = options.reviewedCells;
+  if (reviewed) {
+    // v1.4.9: the operator's Cell Annotation boxes ARE the cells. They replace the classical grid in every region.
+    const { boxes: reviewedBoxes, dropped } = normalizeReviewedCellBoxes(reviewed, imgWidth, imgHeight);
+    if (dropped) warnings.push(`${dropped} reviewed cell box(es) were malformed or too small and were ignored.`);
+    const direct = reviewedBoxes.length
+      ? applyYoloCellsToRegions(stage1.moduleRegions, reviewedBoxes, { minCells: 1, adoptOrphans: true, clearUnassigned: true, imageWidth: imgWidth, imageHeight: imgHeight, expandRegionToCells: true })
+      : { regions: stage1.moduleRegions, applied: 0, orphans: 0 };
+    if (direct.applied > 0) {
+      stage1 = { ...stage1, moduleRegions: direct.regions };
+      cellBasis = 'reviewed-cells';
+      warnings.push(`Crack pass used ${direct.applied} cell box(es) from the Cell Annotation stage${direct.orphans ? ` (${direct.orphans} outside the automatically located panels)` : ''}; the automatic edge-periodicity grid was not used.`);
+    } else if (reviewed.allowClassicalFallback) {
+      warnings.push('This image has no cell boxes from the Cell Annotation stage; the automatic classical grid was used because the fallback is enabled. Cell positions there are provisional.');
+    } else {
+      // No reviewed cells and no fallback permitted: nothing to classify. Clear grids so no guessed lattice is scored.
+      stage1 = { ...stage1, moduleRegions: stage1.moduleRegions.map((region) => ({ ...region, cellGrid: undefined })) };
+      cellBasis = 'none';
+      warnings.push('This image has no cell boxes from the Cell Annotation stage, so the crack classifier had no cells to inspect. Run/draw cells in Cell Annotation (or enable the classical-grid fallback) and re-run.');
+    }
+  } else if (cellDetection.source === 'yolo11n' && cellDetection.boxes.length) {
+    const directCells = applyYoloCellsToRegions(stage1.moduleRegions, cellDetection.boxes, { imageWidth: imgWidth, imageHeight: imgHeight, expandRegionToCells: true });
+    if (directCells.applied >= 4) {
+      stage1 = { ...stage1, moduleRegions: directCells.regions };
+      cellBasis = 'yolo-cells';
+      console.log(`[CV] Direct YOLO cell detections now drive cell localization: ${directCells.applied} cells.`);
+    } else {
+      warnings.push('The trained cell detector returned boxes but fewer than four could be assigned to a PV region; classical validated cell geometry remains active for this image.');
+    }
+  }
+  // A weak-periodicity warning only makes sense for the classical grid; reviewed/YOLO cells are not periodicity estimates.
+  const lowConfidenceCellGrids = cellBasis === 'classical-grid'
+    ? stage1.moduleRegions.filter((region) => !region.isFallback && (region.cellGrid?.confidence ?? 0) < 0.25)
+    : [];
   if (lowConfidenceCellGrids.length > 0) {
     warnings.push(
       `${lowConfidenceCellGrids.length} solar-cell region(s) had weak edge-map periodicity. Cell coordinates in those regions are provisional; review the cell-edge overlay before relying on them.`
@@ -2764,239 +2670,10 @@ export async function analyzeInspectionImage(
   const pvActiveTiles = tiles.filter((t) => t.pvCoverageRatio >= 0.1);
   const candidatePool = pvActiveTiles.length > 0 ? pvActiveTiles : tiles;
 
-  const rankedCandidates = [...candidatePool].sort((a, b) => {
-    const scoreA =
-      a.offAxisEdgeScore +
-      a.impactKurtosisScore * 0.65 +
-      (a.isPerimeterTile ? 45 : 0) +
-      a.pvCoverageRatio * 12;
-    const scoreB =
-      b.offAxisEdgeScore +
-      b.impactKurtosisScore * 0.65 +
-      (b.isPerimeterTile ? 45 : 0) +
-      b.pvCoverageRatio * 12;
-    return scoreB - scoreA;
-  });
-
-  // Keep central cell coverage in the VLM budget, then use the remaining slots for edge/interior strips.
-  const perimCount = rankedCandidates.filter((t) => t.isPerimeterTile).length;
-  const maxToInspect = Math.max(
-    Math.min(14, perimCount),
-    Math.max(1, Math.min(16, config.maxTilesToInspect || 12))
-  );
-  // Preserve at least one interior/center tile per detected array. Otherwise perimeter scoring
-  // can consume the budget and leave middle solar cells unseen by the VLM.
-  const requiredInteriorTiles = rankedCandidates.filter((tile) => /-CENTER$/.test(tile.id));
-  const selectedTileList: TileDiagnostic[] = [];
-  for (const tile of requiredInteriorTiles) {
-    if (selectedTileList.length < maxToInspect) selectedTileList.push(tile);
-  }
-  for (const tile of rankedCandidates) {
-    if (selectedTileList.length >= maxToInspect) break;
-    if (!selectedTileList.some((picked) => picked.id === tile.id)) selectedTileList.push(tile);
-  }
-  const selectedTiles = ai ? selectedTileList : []; // offline: no VLM tiles
-  const selectedIds = new Set(selectedTiles.map((t) => t.id));
-  tiles.forEach((t) => {
-    if (selectedIds.has(t.id)) t.inspectedByVlm = true;
-  });
-
-  const sensitivityGuidance =
-    config.sensitivity === 'high'
-      ? 'HIGH RECALL MODE: Inspect every detected solar cell, including central and interior cells. Report all visible glass-fracture networks, single-cell diagonal cracks, and multi-cell sweeping arcs; do not limit the search to the array perimeter.'
-      : config.sensitivity === 'strict'
-        ? 'PRECISION FRACTURE MODE: Inspect every solar cell. Report clear glass-fracture networks, diagonal cell fractures, and impact pits; ignore minor dust and ambiguous reflections.'
-        : 'BALANCED MODE: Inspect every row and column of solar cells for localized cracks, spider-web networks, impacts, and residue. Include both interior and border cells.';
-
-  const systemInstruction = `You are a specialized Photovoltaic Glass Fracture Computer Vision Inspector. The input tile may show any part of a photovoltaic array, including central/interior cells and perimeter cells.
-
-CRITICAL — INSPECT EVERY VISIBLE SOLAR CELL:
-1. GLASS FRACTURE NETWORKS:
-   - Find thin bright silver-white curved, diagonal, criss-crossing, fan-shaped, or branching lines that cut across the regular horizontal cell fingers.
-   - Fractures may be fully inside one cell, cross adjacent cells, or begin at the module frame. Do not require contact with the outer frame.
-   - A localized interior-cell crack is still a valid defect; use isEdgeCrack=false and edgeSide="interior" unless it genuinely touches the outer array boundary.
-2. CELL-BY-CELL COVERAGE:
-   - Examine all visible cell surfaces, including center rows and columns—not just the left/right border columns.
-   - Do not confuse straight cell fingers, busbars, inter-cell gaps, cell seams, or reflections with fractures.
-
-OTHER DEFECT CATEGORIES & RULES:
-- "impact_point": Small localized bright white stone/hail pit or chip inside a cell without branching arcs.
-- "linear_fracture": Single isolated diagonal micro-crack inside any cell.
-- "surface_residue": Opaque white sealant/bird-dropping smear on top of glass.
-- Set isEdgeCrack=true only when the fracture touches the outer cell row/column or module frame; otherwise set it false and edgeSide="interior".
-- GROUND RULE: never mark bare soil, grass, shadows, torque tubes, cables or anything outside the solar-cell surfaces. Every box and point MUST lie on a cell; shrink a candidate to the cell area or omit it if it touches ground.
-- Ignore straight cell fingers, busbars, straight white inter-cell gaps, aluminum frames, and ground grass/soil.
-${sensitivityGuidance}`;
-
   const rawDetections: Array<DetectedAnomaly> = [];
-  let primaryModelUsed = ai ? FALLBACK_MODEL : 'classical-offline';
 
-  const encodedTiles = await Promise.all(
-    selectedTiles.map(async (tile, tIdx) => {
-      const tileJpeg = await buildContrastBoostedTileJpeg(
-        rawRgb,
-        imgWidth,
-        imgHeight,
-        tile.pixelBox,
-        config.contrastEnhancement
-      );
-      return {
-        tIdx,
-        tile,
-        base64Tile: tileJpeg.toString('base64'),
-      };
-    })
-  );
-
-  type RawDetItem = {
-    category: string;
-    isEdgeCrack: boolean;
-    edgeSide: string;
-    severity: string;
-    confidence: number;
-    title: string;
-    description: string;
-    radialBranches: number;
-    pointY: number;
-    pointX: number;
-    ymin: number;
-    xmin: number;
-    ymax: number;
-    xmax: number;
-  };
-
-  // Focused VLM Chunking: max 4 tiles per request prevents multi-image attention dilution!
-  const CHUNK_SIZE = 4;
-  const tileChunks: Array<typeof encodedTiles> = [];
-  for (let i = 0; i < encodedTiles.length; i += CHUNK_SIZE) {
-    tileChunks.push(encodedTiles.slice(i, i + CHUNK_SIZE));
-  }
-
-  const runVlmChunk = async (
-    chunk: typeof encodedTiles
-  ): Promise<Array<{ globalTileIdx: number; det: RawDetItem }>> => {
-    const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
-    for (let localIdx = 0; localIdx < chunk.length; localIdx++) {
-      const item = chunk[localIdx];
-      parts.push({
-        text: `TILE_INDEX=${localIdx} | Tile ID=${item.tile.id} (${item.tile.pixelBox.width}x${item.tile.pixelBox.height}px, offAxisFractureScore=${item.tile.offAxisEdgeScore}):`,
-      });
-      parts.push({
-        inlineData: {
-          mimeType: 'image/jpeg',
-          data: item.base64Tile,
-        },
-      });
-    }
-    parts.push({
-      text: `Inspect EVERY tile above (TILE_INDEX 0 through ${chunk.length - 1}) row-by-row. Pay special attention to the outermost cell columns touching the right and left white aluminum frames, as well as corners, for diagonal/curved/branching spider-web glass cracks cutting across the horizontal cell fingers!`,
-    });
-
-    resetExhaustedIfNewDay();
-    const candidateModels = [PRIMARY_MODEL, FALLBACK_MODEL].filter(
-      (m, i, a) => a.indexOf(m) === i && !dailyExhaustedModels.has(m)
-    );
-    const modelChain = candidateModels.length > 0 ? candidateModels : [FALLBACK_MODEL];
-
-    let textOut = '{"tileResults":[]}';
-    let ok = false;
-    let chunkErr: unknown;
-
-    for (let mIdx = 0; mIdx < modelChain.length && !ok; mIdx++) {
-      const modelName = modelChain[mIdx];
-      const maxRetries = modelName === FALLBACK_MODEL ? 3 : 1;
-
-      for (let retry = 0; retry < maxRetries; retry++) {
-        const abortController = new AbortController();
-        const timer = setTimeout(() => abortController.abort(), 42000);
-        try {
-          const useThinking = modelName === PRIMARY_MODEL && PRIMARY_MODEL !== FALLBACK_MODEL;
-          const res = await ai!.models.generateContent({
-            model: modelName,
-            contents: { parts },
-            config: {
-              abortSignal: abortController.signal,
-              systemInstruction,
-              ...(useThinking ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } } : {}),
-              responseMimeType: 'application/json',
-              responseSchema: tileDetectionSchema,
-              temperature: 0.1,
-            },
-          });
-          clearTimeout(timer);
-          primaryModelUsed = modelName;
-          textOut = (res.text ?? '{"tileResults":[]}').trim();
-          ok = true;
-          break;
-        } catch (err: unknown) {
-          clearTimeout(timer);
-          chunkErr = err;
-          const errMsg = err instanceof Error ? err.message : String(err);
-          if (errMsg.includes('PerDay') || errMsg.includes('NOT_FOUND')) {
-            dailyExhaustedModels.add(modelName);
-            break;
-          }
-          await new Promise((r) => setTimeout(r, 1200 * (retry + 1)));
-        }
-      }
-    }
-
-    if (!ok) {
-      throw chunkErr instanceof Error ? chunkErr : new Error('Tile VLM chunk inference failed');
-    }
-
-    let parsed: {
-      tileResults?: Array<{
-        tileIndex: number;
-        detections?: RawDetItem[];
-      }>;
-    };
-    try {
-      parsed = JSON.parse(textOut);
-    } catch {
-      throw new Error('Gemini returned non-JSON output');
-    }
-
-    const items: Array<{ globalTileIdx: number; det: RawDetItem }> = [];
-    for (const tr of parsed.tileResults || []) {
-      const localIdx = tr.tileIndex ?? 0;
-      if (!Number.isInteger(localIdx) || localIdx < 0 || localIdx >= chunk.length) continue; // was clamped onto wrong tile
-      const globalTileIdx = chunk[localIdx].tIdx;
-      for (const det of tr.detections || []) {
-        items.push({ globalTileIdx, det });
-      }
-    }
-    return items;
-  };
-
-  // Run Stage 3A (Focused VLM Chunks) + Stage 3B (Native-Resolution Classical Orthogonal-Residual Detector)
-  const [chunkOutputs, classicalDetections, learnedDetections] = await Promise.all([
-    (async () => {
-      const allItems: Array<{ globalTileIdx: number; det: RawDetItem }> = [];
-      if (!ai) return allItems; // offline: skip VLM entirely
-      let failedChunks = 0;
-      // Run up to 2 chunks concurrently for speed while staying gentle on rate limits
-      for (let i = 0; i < tileChunks.length; i += 2) {
-        const pair = tileChunks.slice(i, i + 2);
-        const pairRes = await Promise.all(
-          pair.map((ch) =>
-            runVlmChunk(ch).catch((e: unknown) => {
-              failedChunks++; // network/quota failure no longer aborts the whole image
-              console.warn('VLM chunk failed:', e instanceof Error ? e.message : e);
-              return [] as Array<{ globalTileIdx: number; det: RawDetItem }>;
-            })
-          )
-        );
-        for (const arr of pairRes) allItems.push(...arr);
-      }
-      if (failedChunks > 0) {
-        warnings.push(
-          `Gemini failed on ${failedChunks}/${tileChunks.length} tile batches; results rely more on the classical detector.`
-        );
-        if (failedChunks === tileChunks.length) primaryModelUsed = 'classical-offline (Gemini failed)';
-      }
-      return allItems;
-    })(),
+  // Classical orthogonal-residual + learned edge-crack detectors (fully offline)
+  const [classicalDetections, learnedDetections] = await Promise.all([
     detectClassicalModuleSpiderWebs(
       rawRgb,
       imgWidth,
@@ -3008,117 +2685,11 @@ ${sensitivityGuidance}`;
   ]);
 
   let groundRejected = 0;
-  const minConf =
-    config.sensitivity === 'strict' ? 0.58 : config.sensitivity === 'high' ? 0.46 : 0.52;
-
-  for (let dIdx = 0; dIdx < chunkOutputs.length; dIdx++) {
-    const { globalTileIdx, det: d } = chunkOutputs[dIdx];
-    const tile = selectedTiles[globalTileIdx];
-    if (!tile) continue;
-
-    const cat = normalizeCategory(d.category);
-    if (!config.includeSurfaceResidue && cat === 'surface_residue') {
-      continue;
-    }
-    if ((d.confidence ?? 0) < minConf) continue;
-    if (![d.ymin, d.xmin, d.ymax, d.xmax].every((v) => Number.isFinite(v))) continue; // guard NaN boxes
-
-    const yminClamped = Math.max(0, Math.min(995, d.ymin));
-    const xminClamped = Math.max(0, Math.min(995, d.xmin));
-    const ymaxClamped = Math.max(yminClamped + 8, Math.min(1000, d.ymax));
-    const xmaxClamped = Math.max(xminClamped + 8, Math.min(1000, d.xmax));
-
-    const globalLeft = Math.round(
-      tile.pixelBox.left + (xminClamped / 1000) * tile.pixelBox.width
-    );
-    const globalTop = Math.round(
-      tile.pixelBox.top + (yminClamped / 1000) * tile.pixelBox.height
-    );
-    const globalRight = Math.round(
-      tile.pixelBox.left + (xmaxClamped / 1000) * tile.pixelBox.width
-    );
-    const globalBottom = Math.round(
-      tile.pixelBox.top + (ymaxClamped / 1000) * tile.pixelBox.height
-    );
-
-    let pBox: PixelBox = {
-      left: Math.max(0, globalLeft),
-      top: Math.max(0, globalTop),
-      width: Math.max(16, Math.min(imgWidth - globalLeft, globalRight - globalLeft)),
-      height: Math.max(16, Math.min(imgHeight - globalTop, globalBottom - globalTop)),
-    };
-
-    if (config.rejectGround) {
-      const gated = applyGroundGate(pBox, stage1, imgWidth, imgHeight);
-      if (!gated) {
-        groundRejected++;
-        continue;
-      }
-      pBox = gated; // clipped to module interior
-    }
-
-    const rawPtX =
-      typeof d.pointX === 'number'
-        ? Math.round(
-            tile.pixelBox.left + (Math.max(0, Math.min(1000, d.pointX)) / 1000) * tile.pixelBox.width
-          )
-        : Math.round(pBox.left + pBox.width / 2);
-    const rawPtY =
-      typeof d.pointY === 'number'
-        ? Math.round(
-            tile.pixelBox.top + (Math.max(0, Math.min(1000, d.pointY)) / 1000) * tile.pixelBox.height
-          )
-        : Math.round(pBox.top + pBox.height / 2);
-
-    const ptX = Math.max(pBox.left, Math.min(pBox.left + pBox.width, rawPtX));
-    const ptY = Math.max(pBox.top, Math.min(pBox.top + pBox.height, rawPtY));
-
-    const edgeMeta = normalizeEdgeSide(
-      d.edgeSide,
-      Boolean(d.isEdgeCrack),
-      pBox,
-      stage1.moduleRegions
-    );
-
-    const loc = resolveModuleAndCell(ptX, ptY, stage1.moduleRegions, imgWidth, imgHeight);
-    const estMm = Math.round(Math.max(pBox.width, pBox.height) * geoReference.gsdMmPerPx);
-
-    tile.detectionsCount += 1;
-
-    rawDetections.push({
-      id: `${tile.id}-D${dIdx + 1}`,
-      category: cat,
-      isEdgeCrack: edgeMeta.isEdgeCrack,
-      edgeSide: edgeMeta.edgeSide,
-      severity: normalizeSeverity(d.severity, cat),
-      confidence: Number(Math.min(0.99, Math.max(0.5, d.confidence)).toFixed(2)),
-      title:
-        d.title || (cat === 'spider_web_crack' ? 'Edge Spider-Web Glass Crack' : 'Surface Anomaly'),
-      description:
-        d.description ||
-        'Detected surface fracture pattern during high-resolution solar-cell inspection tile scan.',
-      moduleIndex: loc.moduleIndex,
-      cellLocation: loc.cellLocation,
-      radialBranches:
-        cat === 'spider_web_crack' ? Math.max(2, d.radialBranches || 4) : d.radialBranches || 0,
-      estimatedDiameterMm: estMm,
-      pointPx: { x: ptX, y: ptY },
-      box: {
-        xmin: pBox.left / imgWidth,
-        ymin: pBox.top / imgHeight,
-        xmax: (pBox.left + pBox.width) / imgWidth,
-        ymax: (pBox.top + pBox.height) / imgHeight,
-      },
-      pixelBox: pBox,
-      tileId: tile.id,
-      offAxisEdgeScore: tile.offAxisEdgeScore,
-    });
-  }
-
+  const trustConfirmedCells = cellBasis === 'reviewed-cells' || cellBasis === 'yolo-cells';
   // Keep the cell-aware classical detector active even when the learned model is loaded.
   // The learned classifier intentionally scans a narrower edge-ring window set; disabling the
   // classical detector here would silently remove its broader cell-grid coverage. Merge by spatial
-  // overlap, not by module identity: one VLM hit must not hide a separate crack elsewhere on that panel.
+  // overlap, not by module identity: one detection must not hide a separate crack elsewhere on that panel.
   const classicalForMerge = classicalDetections;
   for (const cvDet of classicalForMerge) {
     const alreadyCovered = rawDetections.some((detection) =>
@@ -3126,7 +2697,7 @@ ${sensitivityGuidance}`;
     );
     if (!alreadyCovered) {
       if (config.rejectGround) {
-        const gated = applyGroundGate(cvDet.pixelBox, stage1, imgWidth, imgHeight);
+        const gated = applyGroundGate(cvDet.pixelBox, stage1, imgWidth, imgHeight, trustConfirmedCells);
         if (!gated) {
           groundRejected++;
           continue;
@@ -3142,12 +2713,11 @@ ${sensitivityGuidance}`;
       rawDetections.push(cvDet);
     }
   }
-  // Learned detections: every window is independent evidence (unlike the classical detector they are NOT suppressed
-  // because the module already has a VLM/classical hit). Skip only windows already covered by an accepted detection.
+  // Learned detections are one-per-cell. Suppress only a duplicate result for the same cell rectangle.
   for (const ml of learnedDetections) {
     if (rawDetections.some((d) => computeIoU(d.box, ml.box) > 0.14)) continue;
     if (config.rejectGround) {
-      const gated = applyGroundGate(ml.pixelBox, stage1, imgWidth, imgHeight);
+      const gated = applyGroundGate(ml.pixelBox, stage1, imgWidth, imgHeight, trustConfirmedCells);
       if (!gated) {
         groundRejected++;
         continue;
@@ -3250,13 +2820,13 @@ ${sensitivityGuidance}`;
     megapixels: Number(((imgWidth * imgHeight) / 1_000_000).toFixed(1)),
     analyzedAt,
     processingTimeMs: Date.now() - startTime,
-    modelUsed: `Adaptive-Silicon + Ortho-Ridge + ${primaryModelUsed}`,
+    modelUsed: `Adaptive-Silicon + Ortho-Ridge + Classical Offline${cellDetection.source === 'yolo11n' ? ' + YOLO11n Direct Cell Localization' : ''}`,
     warnings: warnings.length > 0 ? warnings : undefined,
     geoReference,
     pipelineSummary: {
       totalGridTiles: tiles.length,
       pvActiveTiles: candidatePool.length,
-      vlmInspectedTiles: selectedTiles.length,
+      vlmInspectedTiles: 0,
       spiderWebCracksCount,
       edgeSpiderWebCracksCount,
       impactPointsCount,
@@ -3264,6 +2834,10 @@ ${sensitivityGuidance}`;
       surfaceResidueCount,
     },
     moduleRegions: stage1.moduleRegions,
+    cellDetectionBoxes: cellDetection.boxes.map(({ left, top, width, height }) => ({ left, top, width, height })),
+    cellDetectionSource: cellDetection.source,
+    cellDetectionDiagnostics: cellDetection.diagnostics,
+    cellBasis,
     tiles,
     anomalies: enrichedAnomalies,
     geoJson,

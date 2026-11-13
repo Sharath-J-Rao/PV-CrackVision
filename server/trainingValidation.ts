@@ -1,11 +1,11 @@
-/** Shared, deterministic checks for user-feedback training and image-level holdout validation. */
+/** Shared readiness checks for reviewed cell labels and image-level holdout validation. */
 export const TRAINING_REQUIREMENTS = {
-  positives: 30,
-  negatives: 50,
-  images: 10,
-  positiveImages: 3,
-  negativeImages: 3,
-  annotatedRegions: 5,
+  positives: 8,
+  negatives: 8,
+  images: 4,
+  positiveImages: 2,
+  negativeImages: 2,
+  annotatedRegions: 2,
 } as const;
 
 export interface FeedbackReadinessItem {
@@ -80,8 +80,52 @@ function stableHash(value: string): number {
   return hash >>> 0;
 }
 
+export interface ClassWeightSummary { enabled: boolean; positives: number; negatives: number; /** clean : cracked, null without positives */ imbalanceRatio: number | null; positiveWeight: number; negativeWeight: number }
+
 /**
- * Deterministic holdout split by whole image, never by individual windows. It preserves at
+ * v1.4.11.4: per-sample training weights. With `enabled`, cracked and clean cells carry EQUAL TOTAL weight: each class
+ * weight is total / (2 x class mass), where mass is the sum of the per-sample multipliers (edge cells, hard negatives).
+ * Using mass instead of raw counts stops those multipliers from silently re-skewing the classes. The weights still sum
+ * to the total multiplier mass, so the effective learning rate is unchanged. A missing class cannot be
+ * balanced, so both classes keep weight 1 (training is rejected downstream in that case).
+ */
+export function computeClassWeights<T extends { y: 0 | 1; mult?: number }>(samples: T[], enabled: boolean): { weights: number[]; summary: ClassWeightSummary } {
+  let positives = 0, negatives = 0, positiveMass = 0, negativeMass = 0;
+  for (const sample of samples) {
+    const mult = sample.mult ?? 1;
+    if (sample.y === 1) { positives++; positiveMass += mult; } else { negatives++; negativeMass += mult; }
+  }
+  const total = positiveMass + negativeMass;
+  const balanceable = enabled && positiveMass > 0 && negativeMass > 0;
+  const positiveWeight = balanceable ? total / (2 * positiveMass) : 1;
+  const negativeWeight = balanceable ? total / (2 * negativeMass) : 1;
+  return {
+    weights: samples.map((sample) => (sample.y === 1 ? positiveWeight : negativeWeight) * (sample.mult ?? 1)),
+    summary: { enabled, positives, negatives, imbalanceRatio: positives ? Number((negatives / positives).toFixed(3)) : null, positiveWeight: Number(positiveWeight.toFixed(4)), negativeWeight: Number(negativeWeight.toFixed(4)) },
+  };
+}
+
+/**
+ * v1.4.11: splits an existing holdout by whole image into a model-selection set (CNN epoch / early stopping)
+ * and an independent test set used only for the reported metrics. With fewer than four holdout images, or when
+ * both classes cannot be kept in both halves, it falls back to a single shared set and reports `independent: false`
+ * so the figures can be labelled as model-selection validation rather than an unbiased test.
+ */
+export function splitHoldoutByImage<T extends { y: 0 | 1; imageFile: string }>(holdout: T[]): { selection: T[]; test: T[]; independent: boolean } {
+  const byImage = new Map<string, T[]>();
+  for (const sample of holdout) byImage.set(sample.imageFile, [...(byImage.get(sample.imageFile) ?? []), sample]);
+  const groups = [...byImage].map(([imageFile, samples]) => ({ imageFile, samples }));
+  if (groups.length >= 4) {
+    try {
+      const halves = splitByImage(groups, 0.5);
+      return { selection: halves.train, test: halves.validation, independent: true };
+    } catch { /* classes cannot be preserved in both halves: fall back below */ }
+  }
+  return { selection: holdout, test: holdout, independent: false };
+}
+
+/**
+ * Deterministic holdout split by whole image, never by individual cells. It preserves at
  * least one training image for each class and puts at least one image of each class in holdout.
  */
 export function splitByImage<T extends { y: 0 | 1 }>(
@@ -89,7 +133,7 @@ export function splitByImage<T extends { y: 0 | 1 }>(
   validationFraction = 0.25
 ): { train: T[]; validation: T[]; trainImages: string[]; validationImages: string[] } {
   const ordered = [...groups].sort((a, b) => stableHash(a.imageFile) - stableHash(b.imageFile));
-  if (ordered.length < 4) throw new Error('At least four labelled images are required for a separate image-level validation set.');
+  if (ordered.length < 4) throw new Error('At least four labelled images are required for a separate image-level validation set; cell crops from one image are not independent validation samples.');
   const target = Math.min(ordered.length - 2, Math.max(2, Math.ceil(ordered.length * validationFraction)));
   const validationIds = new Set<string>();
   for (const label of [1, 0] as const) {
@@ -119,24 +163,4 @@ export function splitByImage<T extends { y: 0 | 1 }>(
     trainImages: trainGroups.map((group) => group.imageFile),
     validationImages: validationGroups.map((group) => group.imageFile),
   };
-}
-
-/** Negative labels must mine the highest-scoring candidate windows (the hard false positives). */
-export function selectLabelCandidates<T extends { score: number }>(candidates: T[], limit: number): T[] {
-  return [...candidates].sort((a, b) => b.score - a.score).slice(0, Math.max(0, limit));
-}
-
-
-export interface BinaryValidationSummary {
-  recall: number;
-  specificity: number;
-  balancedAccuracy: number;
-  logLoss: number;
-}
-
-/** Do not persist a tuned model unless held-out images show real gain without class regression. */
-export function shouldAcceptCandidate(before: BinaryValidationSummary, after: BinaryValidationSummary): boolean {
-  const classSafe = after.recall >= before.recall - 0.03 && after.specificity >= before.specificity - 0.03;
-  const improved = after.balancedAccuracy >= before.balancedAccuracy + 0.005 || after.logLoss <= before.logLoss - 0.001;
-  return classSafe && improved;
 }

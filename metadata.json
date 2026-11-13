@@ -1,9 +1,7 @@
 {
   "name": "PV CrackVision",
-  "description": "Automated high-resolution computer vision inspection platform for detecting glass fractures and surface anomalies across individual photovoltaic cells.",
+  "description": "PV inspection with direct YOLO cell localization, separate crack training, and advanced-only annotation tools",
   "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ],
-  "version": "1.1.6"
+  "majorCapabilities": [],
+  "version": "1.4.15-0"
 }
