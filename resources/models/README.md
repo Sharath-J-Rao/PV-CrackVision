@@ -1,6 +1,6 @@
 # Bundled AI models (resources/models)
 
-The desktop EXE ships with its AI models so it works **offline with no manual model installation**. Put the two model
+The desktop EXE ships with its AI models so it works **offline with no manual model installation**. Put the model
 files in THIS folder, then build. Nothing else needs to be edited in the code.
 
 ## Files to add
@@ -8,13 +8,13 @@ files in THIS folder, then build. Nothing else needs to be edited in the code.
 | File | What it is | Where to get it |
 |------|-----------|-----------------|
 | `cell.onnx` | YOLO cell detector (ONNX) | Your data folder: `<data folder>/models/cell.onnx`, or in the app **Data & Models → Export active cell model** |
-| `cellCrackModel.user.json` | Crack classifier | Your data folder: `<data folder>/models/cellCrackModel.user.json` |
+| `cellClassifier.onnx` + `cellClassifier.json` | Crack crop classifier (pair) | Your data folder: `<data folder>/models/` (trained in the Training Centre) |
 
 Do **not** add `.pt` checkpoints (training only) or `cell.previous.onnx`.
 
 ## Steps
 
-1. Copy the two files into `resources/models/` (keep the exact file names).
+1. Copy the files into `resources/models/` (keep the exact file names).
 2. Run `npm run models:manifest` — writes `manifest.json` (SHA-256, size, app version the models need).
    Optionally label them: `node scripts/model-manifest.mjs generate --model-version 2026-11-cracks-v3`.
 3. Run `npm run models:check` — must print "Bundled model check passed."

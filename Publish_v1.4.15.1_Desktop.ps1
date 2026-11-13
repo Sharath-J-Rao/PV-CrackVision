@@ -5,11 +5,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Version = '1.4.15.0'
+$Version = '1.4.15.1'
 if (-not $ArchivePath) { $ArchivePath = Join-Path $PSScriptRoot "PV_CrackVision_v$Version`_Windows_Desktop_Source.zip" }
 $Branch = "release/v$Version-desktop"
-$Worktree = Join-Path $env:TEMP ("PV-CrackVision-v1.4.15.0-desktop-" + [guid]::NewGuid().ToString('N'))
-$ExtractRoot = Join-Path $env:TEMP ("PV-CrackVision-v1.4.15.0-source-" + [guid]::NewGuid().ToString('N'))
+$Worktree = Join-Path $env:TEMP ("PV-CrackVision-v1.4.15.1-desktop-" + [guid]::NewGuid().ToString('N'))
+$ExtractRoot = Join-Path $env:TEMP ("PV-CrackVision-v1.4.15.1-source-" + [guid]::NewGuid().ToString('N'))
 $WorktreeAdded = $false
 
 function Invoke-Git {
@@ -32,9 +32,9 @@ try {
         (Test-Path (Join-Path $_.FullName 'electron/main.cjs')) -and
         (Test-Path (Join-Path $_.FullName '.github/workflows/windows-desktop.yml'))
     } | Select-Object -First 1
-    if (-not $source) { throw 'The supplied ZIP is not the desktop-ready v1.4.15.0 source package.' }
+    if (-not $source) { throw 'The supplied ZIP is not the desktop-ready v1.4.15.1 source package.' }
     $SourceRoot = $source.FullName
-    # v1.4.15.0: refuse to publish when package/lockfile/metadata/workflow/artifact identities disagree.
+    # v1.4.15.1: refuse to publish when package/lockfile/metadata/workflow/artifact identities disagree.
     if (Get-Command node -ErrorAction SilentlyContinue) {
         & node (Join-Path $SourceRoot 'scripts/check-release-version.mjs') $SourceRoot $Version
         if ($LASTEXITCODE -ne 0) { throw 'Release version consistency check failed; nothing was pushed.' }
@@ -71,7 +71,7 @@ try {
     & git -C $Worktree diff --cached --quiet
     if ($LASTEXITCODE -eq 0) { throw 'No source changes were found to commit.' }
 
-    & git -C $Worktree commit -m 'Release PV CrackVision v1.4.15.0 Windows desktop'
+    & git -C $Worktree commit -m 'Release PV CrackVision v1.4.15.1 Windows desktop'
     if ($LASTEXITCODE -ne 0) { throw 'Git commit failed.' }
     & git -C $Worktree push -u origin $Branch
     if ($LASTEXITCODE -ne 0) { throw 'Git push failed. Verify Git Credential Manager / GitHub authentication, then retry.' }
@@ -80,7 +80,7 @@ try {
     Write-Host 'Release branch pushed successfully:' -ForegroundColor Green
     Write-Host "https://github.com/Sharath-J-Rao/PV-CrackVision/tree/$Branch"
     Write-Host 'The Windows build workflow is triggered automatically by the branch push.' -ForegroundColor Green
-    Write-Host 'Open GitHub Actions and download both EXE files from the artifact named PV-CrackVision-v1.4.15.0-Windows-x64.'
+    Write-Host 'Open GitHub Actions and download both EXE files from the artifact named PV-CrackVision-v1.4.15.1-Windows-x64.'
 }
 finally {
     if ($WorktreeAdded) { & git -C $RepositoryPath worktree remove --force $Worktree 2>$null }

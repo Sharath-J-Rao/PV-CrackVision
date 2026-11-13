@@ -221,8 +221,8 @@ async function runSmokeTest(baseUrl, health) {
     // v1.4.13.1: CI sets PV_REQUIRE_MODELS=1 so a package without working bundled models can never ship.
     if (process.env.PV_REQUIRE_MODELS === '1') {
       const m = health.models;
-      if (!m?.cell?.ok || !m?.crack?.ok) throw new Error(`Bundled models not usable: ${JSON.stringify(m)}`);
-      log(`Bundled models OK (cell: ${m.cell.source}, crack: ${m.crack.source}, version ${m.manifest}).`);
+      if (!m?.cell?.ok || !m?.classifier?.ok) throw new Error(`Bundled models not usable: ${JSON.stringify(m)}`);
+      log(`Bundled models OK (cell: ${m.cell.source}, classifier: ${m.classifier.source}, version ${m.manifest}).`);
     }
     log(`SMOKE TEST PASSED (engine ${health.engine || 'local'}, v${app.getVersion()}).`);
     app.exit(0);

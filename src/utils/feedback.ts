@@ -1,4 +1,3 @@
-import type { CrackClassifierTrainingSettings } from '../types/trainingSettings';
 import type { DetectedAnomaly, InspectionResult, PixelBox } from '../types/inspection';
 
 export interface FeedbackSummary {
@@ -19,15 +18,6 @@ export interface FeedbackSummary {
     negativeImages: number;
     annotatedRegions: number;
   };
-  modelVersion: string | null;
-  userTuned: boolean;
-  modelAlgorithm?: 'ensemble' | 'gbm' | 'cnn' | 'logistic' | 'unknown' | null;
-  modelHasCnn?: boolean;
-  modelHasGbm?: boolean;
-  modelTrainedAt?: string | null;
-  modelValidation?: { precision?: number; recall?: number; specificity?: number; balancedAccuracy?: number; logLoss?: number; f1?: number; accuracy?: number; tp?: number; fp?: number; tn?: number; fn?: number; threshold?: number; positives?: number; negatives?: number } | null;
-  componentValidation?: Record<string, { precision?: number; recall?: number; specificity?: number; balancedAccuracy?: number; logLoss?: number; f1?: number; accuracy?: number; tp?: number; fp?: number; tn?: number; fn?: number; threshold?: number; positives?: number; negatives?: number }> | null;
-  modelCellBuffer?: number | null;
 }
 
 export interface TrainResult extends FeedbackSummary {
@@ -62,35 +52,6 @@ export const getFeedbackSummary = (): Promise<FeedbackSummary> => fetch('/api/fe
 
 export const deleteFeedback = (id: string): Promise<unknown> =>
   fetch(`/api/feedback/${encodeURIComponent(id)}`, { method: 'DELETE' }).then((r) => json(r));
-
-export interface CrackTrainingJobStatus {
-  status: 'idle' | 'preparing' | 'training' | 'validating' | 'paused' | 'completed' | 'failed';
-  jobId?: string;
-  progress: number;
-  stage: string;
-  message: string;
-  algorithm?: string;
-  epoch?: number;
-  epochs?: number;
-  tree?: number;
-  trees?: number;
-  samples?: number;
-  trainingSamples?: number;
-  validationSamples?: number;
-  metrics: Array<{ epoch: number; trainLoss: number; validationLoss: number; precision: number; recall: number; specificity: number; balancedAccuracy: number; f1: number; component: 'CNN' }>;
-  log: string[];
-  startedAt?: string;
-  finishedAt?: string;
-  updatedAt?: string;
-  error?: string;
-  errorTraceback?: string;
-  report?: TrainResult;
-}
-export const trainModel = (settings?: Partial<CrackClassifierTrainingSettings>): Promise<CrackTrainingJobStatus> => fetch('/api/train', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings ?? {}) }).then((r) => json<CrackTrainingJobStatus>(r));
-export const getCrackTrainingStatus = (): Promise<CrackTrainingJobStatus> => fetch('/api/train/status', { cache: 'no-store' }).then((r) => json<CrackTrainingJobStatus>(r));
-
-/** v1.4.10: pause / resume / abort the running crack-classifier training job. */
-export const crackTrainingAction = (action: 'pause' | 'resume' | 'abort'): Promise<CrackTrainingJobStatus> => fetch(`/api/train/${action}`, { method: 'POST' }).then((r) => json<CrackTrainingJobStatus>(r));
 
 export const resetModel = (): Promise<FeedbackSummary> => fetch('/api/train/reset', { method: 'DELETE' }).then((r) => json<FeedbackSummary>(r));
 

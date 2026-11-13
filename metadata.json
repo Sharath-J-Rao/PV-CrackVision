@@ -3,5 +3,5 @@
   "description": "PV inspection with direct YOLO cell localization, separate crack training, and advanced-only annotation tools",
   "requestFramePermissions": [],
   "majorCapabilities": [],
-  "version": "1.4.15-0"
+  "version": "1.4.15-1"
 }

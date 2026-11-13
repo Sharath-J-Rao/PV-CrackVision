@@ -17,12 +17,7 @@ export const DEFAULT_TRAINING_SETTINGS: TrainingSettings = {
     seed: 0, deterministic: true, cache: true, pretrained: true, savePeriod: 10, minimumMap50: 0.05, onnxGateTolerance: 0.02, missedCellRepeat: 2, partialMaskMargin: 0.15, // bootstrap-friendly: a rough first model must be activatable so it can pre-label images for correction
   },
   crackClassifier: {
-    iterations: 1400, learningRate: 0.055, l2: 0.015, validationFraction: 0.25,
-    thresholdMin: 0.2, thresholdMax: 0.8, thresholdStep: 0.025,
-    minimumBalancedAccuracy: 0.55, classBalance: true, cellBuffer: 0.03,
-    algorithm: 'ensemble', gbmTrees: 160, gbmDepth: 3, gbmLearningRate: 0.08, gbmMinLeaf: 3, gbmSubsample: 0.8,
-    cnnEpochs: 20, cnnLearningRate: 0.004, cnnBatchSize: 24,
-    cnnEarlyStopPatience: 8, edgeThresholdDrop: 0.1, edgeRequireAgreement: true, edgeSampleWeight: 2, hardNegativeWeight: 2, missedCrackWeight: 3,
+    cellBuffer: 0.03, edgeThresholdDrop: 0.1, edgeRequireAgreement: true, edgeSampleWeight: 2, hardNegativeWeight: 2, missedCrackWeight: 3,
   },
   // Defaults equal the values that were hard-coded before v1.4.7.0, so behaviour is unchanged until edited.
   cellInference: {
@@ -43,6 +38,7 @@ export const DEFAULT_TRAINING_SETTINGS: TrainingSettings = {
     ],
   },
   crackDetection: { groundMaxSoilFraction: 0.3, groundMinPvFraction: 0.5, groundMinPvFractionFallback: 0.25, decisionThreshold: 0, lowConfidenceThreshold: 90 },
+  workflow: { autoDetectOnUpload: true }, // v1.4.15.1: start cell then crack detection as soon as images are uploaded
   crackNet: {
     clsBase: 'yolo11n-cls.pt', clsEpochs: 40, clsImgsz: 224, clsBatch: 64, clsPatience: 10, targetRecall: 0.95, minBalancedAccuracy: 0.8, valFraction: 0.2,
     detBase: 'yolo11n.pt', detEpochs: 60, detImgsz: 1280, detBatch: 8, detPatience: 15, detTileOverlap: 0.25, shadowEnabled: false, candidateTta: true, seed: 42,
@@ -139,8 +135,6 @@ export function normalizeTrainingSettings(input: unknown): TrainingSettings {
   };
   const optimizer = ['auto', 'SGD', 'Adam', 'AdamW', 'RMSProp'].includes(cell.optimizer) ? cell.optimizer : d.cellDetector.optimizer;
   const imageSize = (CELL_IMAGE_SIZES as readonly number[]).includes(Number(cell.imageSize)) ? Number(cell.imageSize) : d.cellDetector.imageSize;
-  const thresholdMin = number(crack.thresholdMin, d.crackClassifier.thresholdMin, 0.05, 0.8);
-  const thresholdMax = Math.max(thresholdMin + 0.025, number(crack.thresholdMax, d.crackClassifier.thresholdMax, 0.2, 0.95));
   return {
     cellDetector: {
       epochs: number(cell.epochs, d.cellDetector.epochs, 1, 500, true),
@@ -167,25 +161,7 @@ export function normalizeTrainingSettings(input: unknown): TrainingSettings {
       partialMaskMargin: number(cell.partialMaskMargin, d.cellDetector.partialMaskMargin, 0, 1),
     },
     crackClassifier: {
-      iterations: number(crack.iterations, d.crackClassifier.iterations, 100, 50000, true),
-      learningRate: number(crack.learningRate, d.crackClassifier.learningRate, 0.000001, 1),
-      l2: number(crack.l2, d.crackClassifier.l2, 0, 10),
-      validationFraction: number(crack.validationFraction, d.crackClassifier.validationFraction, 0.1, 0.4),
-      thresholdMin, thresholdMax,
-      thresholdStep: number(crack.thresholdStep, d.crackClassifier.thresholdStep, 0.005, 0.2),
-      minimumBalancedAccuracy: number(crack.minimumBalancedAccuracy, d.crackClassifier.minimumBalancedAccuracy, 0.5, 0.95),
-      classBalance: bool(crack.classBalance, d.crackClassifier.classBalance),
       cellBuffer: number(crack.cellBuffer, d.crackClassifier.cellBuffer, 0, 0.1),
-      algorithm: ['ensemble', 'gbm', 'cnn', 'logistic'].includes(crack.algorithm) ? crack.algorithm : d.crackClassifier.algorithm,
-      gbmTrees: number(crack.gbmTrees, d.crackClassifier.gbmTrees, 10, 1000, true),
-      gbmDepth: number(crack.gbmDepth, d.crackClassifier.gbmDepth, 1, 8, true),
-      gbmLearningRate: number(crack.gbmLearningRate, d.crackClassifier.gbmLearningRate, 0.005, 0.5),
-      gbmMinLeaf: number(crack.gbmMinLeaf, d.crackClassifier.gbmMinLeaf, 1, 50, true),
-      gbmSubsample: number(crack.gbmSubsample, d.crackClassifier.gbmSubsample, 0.3, 1),
-      cnnEpochs: number(crack.cnnEpochs, d.crackClassifier.cnnEpochs, 1, 200, true),
-      cnnLearningRate: number(crack.cnnLearningRate, d.crackClassifier.cnnLearningRate, 0.0001, 0.05),
-      cnnBatchSize: number(crack.cnnBatchSize, d.crackClassifier.cnnBatchSize, 4, 128, true),
-      cnnEarlyStopPatience: number(crack.cnnEarlyStopPatience, d.crackClassifier.cnnEarlyStopPatience, 0, 100, true),
       edgeThresholdDrop: number(crack.edgeThresholdDrop, d.crackClassifier.edgeThresholdDrop, 0, 0.4),
       edgeRequireAgreement: bool(crack.edgeRequireAgreement, d.crackClassifier.edgeRequireAgreement), // absent in older saved settings -> default (on)
       edgeSampleWeight: number(crack.edgeSampleWeight, d.crackClassifier.edgeSampleWeight, 1, 10),
@@ -193,6 +169,7 @@ export function normalizeTrainingSettings(input: unknown): TrainingSettings {
       missedCrackWeight: number(crack.missedCrackWeight, d.crackClassifier.missedCrackWeight, 1, 10),
     },
     cellInference, cellTypeFilter, crackDetection, crackNet,
+    workflow: { autoDetectOnUpload: bool(source.workflow?.autoDetectOnUpload, d.workflow.autoDetectOnUpload) },
     defaultsVersion: DEFAULTS_VERSION,
   };
 }

@@ -13,10 +13,10 @@ const record = {
 };
 
 test('cell training backup round-trips annotations and verified source-image bytes', async () => {
-  const archive = await createCellTrainingDataBundle([record], () => sourceImage, '1.4.15-0');
+  const archive = await createCellTrainingDataBundle([record], () => sourceImage, '1.4.15-1');
   const restored = await parseCellTrainingDataBundle(archive);
   assert.equal(restored.manifest.format, 'pv-crackvision-cell-training-data');
-  assert.equal(restored.manifest.appVersion, '1.4.15-0');
+  assert.equal(restored.manifest.appVersion, '1.4.15-1');
   assert.deepEqual(restored.records, [record]);
   assert.deepEqual(restored.images.get(imageFile), sourceImage);
 });
@@ -39,7 +39,7 @@ test('legacy records without boxes are imported as true-background negative samp
 });
 
 test('cell training backup rejects a source-image hash mismatch', async () => {
-  const archive = await createCellTrainingDataBundle([record], () => sourceImage, '1.4.15-0');
+  const archive = await createCellTrainingDataBundle([record], () => sourceImage, '1.4.15-1');
   const tampered = Buffer.from(archive);
   // Parsing checks CRC and SHA-1; altering archive bytes must fail before records are applied.
   tampered[tampered.length - 10] ^= 0xff;
@@ -49,7 +49,7 @@ test('cell training backup rejects a source-image hash mismatch', async () => {
 
 test('cell training backup carries the reusable .pt checkpoint for transfer-learning recovery', async () => {
   const checkpoint = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.alloc(2048, 7)]);
-  const archive = await createCellTrainingDataBundle([record], () => sourceImage, '1.4.15-0', () => checkpoint);
+  const archive = await createCellTrainingDataBundle([record], () => sourceImage, '1.4.15-1', () => checkpoint);
   const restored = await parseCellTrainingDataBundle(archive);
   assert.deepEqual(restored.checkpoint, checkpoint);
   assert.equal(restored.manifest.checkpoint.size, checkpoint.length);

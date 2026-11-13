@@ -3,7 +3,7 @@ name: Build PV CrackVision Windows Desktop
 on:
   push:
     branches:
-      - release/v1.4.15.0-desktop
+      - release/v1.4.15.1-desktop
   workflow_dispatch:
 
 permissions:
@@ -71,7 +71,7 @@ jobs:
           $worker = Join-Path 'desktop-dist\win-unpacked\resources\app.asar.unpacked\training' 'train_cell_yolo.py'
           $dependencyHelper = Join-Path 'desktop-dist\win-unpacked\resources\app.asar.unpacked\training' 'install_package_dependencies.py'
           $bundledModels = 'desktop-dist\win-unpacked\resources\models'
-          foreach ($m in @('cell.onnx','cellCrackModel.user.json','cellClassifier.onnx','cellClassifier.json','manifest.json')) { if (-not (Test-Path (Join-Path $bundledModels $m))) { throw "Bundled model missing from the package: $m" } }
+          foreach ($m in @('cell.onnx','cellClassifier.onnx','cellClassifier.json','manifest.json')) { if (-not (Test-Path (Join-Path $bundledModels $m))) { throw "Bundled model missing from the package: $m" } }
           if (-not (Test-Path $worker)) { throw "YOLO Python worker was not unpacked for the external Python process: $worker" }
           if (-not (Test-Path $dependencyHelper)) { throw "Python dependency helper was not unpacked: $dependencyHelper" }
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
@@ -106,7 +106,7 @@ jobs:
       - name: Upload desktop deliverables
         uses: actions/upload-artifact@v4
         with:
-          name: PV-CrackVision-v1.4.15.0-Windows-x64
+          name: PV-CrackVision-v1.4.15.1-Windows-x64
           path: |
             desktop-dist/PV-CrackVision-${{ steps.ver.outputs.version }}-x64.exe
             desktop-dist/PV-CrackVision-${{ steps.ver.outputs.version }}-Portable.exe

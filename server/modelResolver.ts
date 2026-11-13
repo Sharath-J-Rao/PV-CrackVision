@@ -11,7 +11,6 @@ import { APP_VERSION } from './appVersion.ts';
 import { isPackagedApp } from './appConfig.ts';
 
 export const CELL_MODEL_FILE = 'cell.onnx';
-export const CRACK_MODEL_FILE = 'cellCrackModel.user.json';
 export type ModelSource = 'user' | 'bundled';
 export type ModelCandidate = { path: string; source: ModelSource };
 export type ModelResolution = { candidates: ModelCandidate[]; warnings: string[] };
@@ -95,10 +94,9 @@ export function resolveClassifierFiles(userDir: string = MODEL_DATA_DIR, bundled
 }
 
 export const resolveCellModel =(): ModelResolution => resolveModel(CELL_MODEL_FILE);
-export const resolveCrackModelFile = (): ModelResolution => resolveModel(CRACK_MODEL_FILE);
 
 /** Summary for /api/health, the detector status and the smoke test. */
 export function getModelHealth() {
   const summarize = (r: ModelResolution) => ({ ok: r.candidates.length > 0, source: r.candidates[0]?.source ?? null, warnings: r.warnings });
-  return { cell: summarize(resolveCellModel()), crack: summarize(resolveCrackModelFile()), bundledDir: bundledModelsDir(), manifest: readManifest(bundledModelsDir())?.modelVersion ?? null };
+  return { cell: summarize(resolveCellModel()), classifier: (() => { const c = resolveClassifierFiles(); return { ok: c !== null, source: c?.source ?? null, warnings: [] as string[] }; })(), bundledDir: bundledModelsDir(), manifest: readManifest(bundledModelsDir())?.modelVersion ?? null };
 }

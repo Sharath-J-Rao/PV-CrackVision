@@ -1,6 +1,6 @@
 # PV CrackVision
 
-**Current release: v1.4.15.0.** This release introduces the simplified end-user workflow (upload → cell detections → crack detection → download with original file names); annotation, training and data tabs moved under Advanced mode.
+**Current release: v1.4.15.1.** This release introduces the simplified end-user workflow (upload → cell detections → crack detection → download with original file names); annotation, training and data tabs moved under Advanced mode.
 
 Cell localization (YOLO) and cracked/clean cell classification are separate model workflows with separate datasets and separate training monitors.
 
@@ -8,7 +8,7 @@ PV CrackVision is a React + Express + Sharp application for inspecting photovolt
 
 ## Release version management
 
-`package.json` is the single canonical version field. For the next release, run `npm run release:set -- 1.4.15.0` (replace with the desired four-part release label). The script updates the npm lockfile, app metadata, Windows workflow branch/artifact, publisher script, current validation filename and current-release references. The app UI and EXE version are read from package metadata; do not edit version strings independently.
+`package.json` is the single canonical version field. For the next release, run `npm run release:set -- 1.4.15.1` (replace with the desired four-part release label). The script updates the npm lockfile, app metadata, Windows workflow branch/artifact, publisher script, current validation filename and current-release references. The app UI and EXE version are read from package metadata; do not edit version strings independently.
 
 ## Run locally
 
@@ -168,6 +168,6 @@ The desktop app first tries to find `Working Folder\data` above the portable EXE
 For the safest upgrade, keep your current `Working Folder\data` as-is, extract the portable app beneath `Working Folder`, or select that exact `data` folder when the installer asks. Do not copy the data folder into GitHub or into `node_modules`. If you have not yet trained a model, the desktop app can still run the local classical inspection path; learned detection requires the corresponding model to be present in the selected data folder.
 
 
-## Cell-training backup compatibility (v1.4.15.0)
+## Cell-training backup compatibility (v1.4.15.1)
 
 The Training Centre can export and import a portable ZIP containing the direct cell-detector annotation index, original reviewed source images, and the reusable YOLO checkpoint when present. Import is merge-only: source images already present locally are left unchanged, and a bundled checkpoint is restored only when no local checkpoint exists. Backups are integrity-checked by image hash, and annotation records from older PV CrackVision releases are accepted when their optional newer fields are absent. Existing release-to-release data migration remains enabled. Export a backup before using **Reset cell model + training data** if you may want to reuse the annotations later. The reset does not remove the Python training runtime, training settings, or the separate crack-classifier dataset/model.

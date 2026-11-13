@@ -1,4 +1,10 @@
-## v1.4.15.0 - end-user workflow: simplified tabs, Review all, one-click download
+## v1.4.15.1 - classifier-only crack detection, auto-start after upload
+- **Auto-start detections:** as soon as images finish uploading, cell detection runs and crack detection follows automatically. Switch it off under *Training Settings → 00 · Workflow → Auto-start detections after upload* (on by default; saved with the other settings). Images whose reviewed work was restored are not re-run.
+- **Old CNN + gradient boosting removed:** the boosted-tree/CNN/logistic model, its trainer, features, training job, UI and settings (`algorithm`, `gbm*`, `cnn*`, `iterations`, `learningRate`, `l2`, thresholds, validation fraction, class balance) are gone, and `/api/train*` was removed. Crack detection now uses only the pretrained crop classifier (`cellClassifier.onnx/json`): your own trained pair in the data folder, else the one bundled with the app. An old `cellCrackModel.user.json` in a data folder is simply ignored (not deleted); importing such a JSON is rejected.
+- **Bundled models:** `cell.onnx` + `cellClassifier.onnx/json` (the legacy `cellCrackModel.user.json` is no longer bundled). The smoke test now checks the classifier.
+- Tests: `server/trainingSettings.test.mjs`, `server/modelResolver.test.mjs`.
+
+## v1.4.15.1 - release version synchronized from package.json
 - **End-user mode (default):** only Inspection Stage, Crack Detection, Batch · Folder & ZIP, Detection Diagnostics and Marked Images are shown. Cell Annotation, Crack Annotation, Training, Training Settings and Data & Models appear only under **Advanced mode**.
 - **Workflow:** open the app → upload a folder → *Run cell detections for all images* → *Run crack detection for all images* → Marked Images opens automatically with every image that has detections. The Crack Detection tab shows these as Step 1 / 2 / 3 in end-user mode.
 - **Download:** in end-user mode no review step is needed; *Download all as ZIP* (and the per-image JPG button) keep the **original file names** (and the uploaded folder structure inside the ZIP). A name only changes if the extension is not JPEG (output is JPEG) or on a genuine duplicate path.

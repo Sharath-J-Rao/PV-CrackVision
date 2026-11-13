@@ -30,10 +30,11 @@ module.exports = {
     '!**/__pycache__/**',
     '!node_modules/onnxruntime-node/bin/napi-v*/darwin/**', // Windows-only app: drop macOS/Linux onnxruntime binaries (~158 MB)
     '!node_modules/onnxruntime-node/bin/napi-v*/linux/**',
+    '!node_modules/onnxruntime-node/bin/napi-v*/win32/arm64/**', // x64-only build: drop the Windows-on-ARM binaries (~74 MB)
     '!**/*.pyc',
   ],
   // v1.4.13.1: AI models live outside the asar (read by path by onnxruntime) -> <resources>/models, offline and read-only.
-  extraResources: [{ from: 'resources/models', to: 'models', filter: ['cell.onnx', 'cellCrackModel.user.json', 'cellClassifier.onnx', 'cellClassifier.json', 'manifest.json'] }],
+  extraResources: [{ from: 'resources/models', to: 'models', filter: ['cell.onnx', 'cellClassifier.onnx', 'cellClassifier.json', 'manifest.json'] }],
   asar: true,
   asarUnpack: [
     '**/*.node',

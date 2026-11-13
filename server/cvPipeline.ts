@@ -7,7 +7,6 @@ import { buildValidatedCellGeometry } from './cellGeometry.ts';
 import ExifReader from 'exifreader';
 import { lookupMetadata } from './metadataStore.ts';
 import { getTrainingSettings } from './trainingSettings.ts';
-import { loadCrackModel, extractCellSample, scoreCellDetailed } from './crackModel.ts';
 import { loadCellClassifier, classifyCells, classifyCellViews, TTA_VIEWS } from './cellClassifier.ts';
 import { detectModuleCracks, shadowFlagsCell, type ShadowBox } from './moduleShadow.ts';
 import type {
@@ -1915,10 +1914,9 @@ async function detectLearnedEdgeCracks(
   moduleRegions: ModuleRegion[],
   gsdMmPerPx: number
 ): Promise<DetectedAnomaly[]> {
-  // v1.4.14: the pretrained crop classifier decides; the legacy boosted-tree/CNN model is used ONLY while no classifier is installed.
+  // v1.4.15.1: the pretrained crop classifier is the only crack engine (the legacy boosted-tree/CNN model was removed).
   const classifier = await loadCellClassifier();
-  const model = classifier ? null : loadCrackModel();
-  if (!classifier && !model) return [];
+  if (!classifier) return [];
   const cells = moduleRegions
     .filter((region) => (!region.isFallback || region.cellGrid?.method === 'yolo-cell-detection') && region.cellGrid && region.cellGrid.confidence >= 0.2)
     .flatMap((region) => (region.cellGrid?.cells ?? []).map((cell) => ({ region, cell })))
@@ -1932,25 +1930,8 @@ async function detectLearnedEdgeCracks(
     : Promise.resolve(null);
   // One scored entry per usable cell, whichever engine produced it, so the decision loop below exists exactly once.
   const extracted: Array<{ region: ModuleRegion; cell: NonNullable<ModuleRegion['cellGrid']>['cells'][number]; probability: number; parts: number[] }> = [];
-  if (classifier) {
-    const probabilities = await classifyCells(rawRgb, imgWidth, imgHeight, cells.map(({ cell }) => cell.pixelBox), classifier);
-    cells.forEach(({ region, cell }, i) => { if (probabilities[i] >= 0) extracted.push({ region, cell, probability: probabilities[i], parts: [probabilities[i]] }); });
-  } else if (model) {
-    // Legacy path (unchanged from v1.4.13.1): shared extraction with the old trainer, bounded parallel crops to limit native-memory spikes.
-    for (let offset = 0; offset < cells.length; offset += 24) {
-      const batch = cells.slice(offset, offset + 24);
-      const values = await Promise.all(batch.map(async ({ region, cell }) => {
-        try {
-          const sample = await extractCellSample(rawRgb, imgWidth, imgHeight, cell.pixelBox, {
-            window: model.window, margin: model.margin, rich: model.schema === 'cell-level-v2', cnn: Boolean(model.cnn), buffer: model.cellBuffer ?? 0,
-          });
-          const { probability, parts } = scoreCellDetailed(model, sample.features, sample.cnn);
-          return { region, cell, probability, parts };
-        } catch { return null; }
-      }));
-      for (const value of values) if (value) extracted.push(value);
-    }
-  }
+  const probabilities = await classifyCells(rawRgb, imgWidth, imgHeight, cells.map(({ cell }) => cell.pixelBox), classifier);
+  cells.forEach(({ region, cell }, i) => { if (probabilities[i] >= 0) extracted.push({ region, cell, probability: probabilities[i], parts: [probabilities[i]] }); });
   const shadow = await shadowPromise;
   if (!extracted.length) return [];
 
@@ -1959,7 +1940,7 @@ async function detectLearnedEdgeCracks(
   const trainingSettings = getTrainingSettings();
   const priority = trainingSettings.crackClassifier; // v1.4.10: module-perimeter cells get a lower decision threshold
   // v1.4.12.7 hotfix: operator-set crack decision threshold; 0 keeps the threshold tuned during training.
-  const decisionThreshold = trainingSettings.crackDetection.decisionThreshold > 0 ? trainingSettings.crackDetection.decisionThreshold : (classifier?.meta.threshold ?? model!.threshold);
+  const decisionThreshold = trainingSettings.crackDetection.decisionThreshold > 0 ? trainingSettings.crackDetection.decisionThreshold : classifier.meta.threshold;
   const usedIds = new Set<string>(); // v1.4.9: reviewed cells can share a row/column slot, ids must stay unique
   // v1.4.12.9: the "edge" is the outer ring of the DETECTED cell grid (per module), not the looser module-region outline, which
   // also covered the frame, the gap to the next module row and the second cell row, all common false-positive sources.
@@ -1973,7 +1954,7 @@ async function detectLearnedEdgeCracks(
   // v1.4.14.5 accuracy: only cells that could be reported (>= the lowest threshold in play) are re-scored on h/v/hv-flipped views. The final score is
   // the mean of the 4 views, and `parts` becomes the 4 views so the existing outer-ring rule requires EVERY view to clear the relaxed threshold.
   // A failure keeps the single-view score. Cost: 3 extra inferences on the few candidate cells only.
-  if (classifier && trainingSettings.crackNet.candidateTta) {
+  if (trainingSettings.crackNet.candidateTta) {
     const candidates = extracted.filter((entry) => entry.probability >= edgeThreshold);
     if (candidates.length) {
       try {
@@ -1990,8 +1971,7 @@ async function detectLearnedEdgeCracks(
     const { region, cell, probability, parts } = entry;
     const perimeter = !region.isFallback && isGridEdgeCell(cell.pixelBox, gridByRegion.get(region.id));
     if (probability < (perimeter ? edgeThreshold : decisionThreshold)) continue;
-    // Outer-ring cells already get the relaxed threshold, so they must be backed by every classifier component (boosting AND CNN),
-    // not just a high average that one confident component can produce on a gap/frame/busbar look-alike. Single-component models are unaffected.
+    // Outer-ring cells already get the relaxed threshold, so every scored view (original + flips) must clear it, not just a high average.
     if (perimeter && priority.edgeRequireAgreement && parts.some((part) => part < edgeThreshold)) continue;
     const pBox = cell.pixelBox;
     const ptX = Math.round(pBox.left + pBox.width / 2);
@@ -2009,9 +1989,9 @@ async function detectLearnedEdgeCracks(
       severity: probability >= 0.9 ? 'critical' : 'moderate',
       confidence: Number(probability.toFixed(3)),
       title: 'Solar-Cell Crack (trained cell classifier)',
-      description: `Cell-level classifier score ${probability.toFixed(3)} from one validated cell crop (${classifier ? `pretrained classifier ${classifier.meta.version}` : `legacy ${model!.algorithm ?? 'logistic'} model ${model!.version}`}).`,
+      description: `Cell-level classifier score ${probability.toFixed(3)} from one validated cell crop (pretrained classifier ${classifier.meta.version}).`,
       outerRing: perimeter,
-      engine: classifier ? 'classifier' : 'legacy',
+      engine: 'classifier',
       ...(shadow ? { shadowAgree: shadowFlagsCell(shadow, pBox) } : {}),
       moduleIndex: region.label,
       cellLocation: `Cell R${cell.row} · C${cell.column}`,

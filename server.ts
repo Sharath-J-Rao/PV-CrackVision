@@ -15,10 +15,7 @@ import { analyzeInspectionImage } from './server/cvPipeline.ts';
 import type { ReviewedCellInput } from './server/cellDetectionGeometry.ts';
 import { loadMetadata, loadMetadataFile, metadataCount } from './server/metadataStore.ts';
 import { addFeedbackMany, existingFeedbackForImage, clearFeedbackDataset, feedbackCounts, initializeCellFeedbackStore, listFeedback, removeFeedback } from './server/feedbackStore.ts';
-import { resetUserModel, trainFromFeedback } from './server/trainer.ts';
 import { cancelClassifierTraining, classifierLogText, classifierStatusSnapshot, clearClassifierModelsAndData, isClassifierMode, startClassifierTraining } from './server/classifierTraining.ts';
-import { addCrackEpochMetric, appendCrackTrainingLog, beginCrackTrainingJob, crackTrainingLogText, crackTrainingMetricsCsv, getCrackTrainingJobState, isCrackTrainingActive, updateCrackTrainingJob, crackTrainingControl, pauseCrackTraining, resumeCrackTraining, abortCrackTraining } from './server/crackClassifierTrainingJob.ts';
-import { loadCrackModel } from './server/crackModel.ts';
 import { DEFAULT_TRAINING_SETTINGS, getTrainingSettings, saveTrainingSettings } from './server/trainingSettings.ts';
 import { learnProfileFromBoxes } from './server/cellTypeFilter.ts';
 import type {
@@ -50,7 +47,7 @@ const MAX_ZIP_UNPACKED_BYTES = 1.5 * 1024 * 1024 * 1024;
 
 // v1.3.1+ uses reviewed cell crops; v1.4.1+ adds direct-cell YOLO training and an advanced-only annotation workspace.
 // Legacy feedback schemas are preserved in timestamped backup folders during the one-time migration.
-if (initializeCellFeedbackStore()) resetUserModel();
+initializeCellFeedbackStore(); // legacy-schema migration only; the old boosted-tree/CNN model file is no longer used and is left untouched
 
 // Tiny fixed-window limiter so the API can't be hammered 
 const RATE_LIMIT_PER_MIN = Number(process.env.RATE_LIMIT_PER_MIN) || 600;
@@ -473,18 +470,7 @@ async function startServer() {
   app.post('/api/cell-training/rollback', (_req, res) => { try { res.json(rollbackCellModel()); } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : 'Could not roll back the cell model.' }); } });
 
   // ---- Reviewed cell annotations + fresh cell-level model training ----
-  const feedbackState = () => {
-    const m = loadCrackModel();
-    const modelAlgorithm = !m ? null : m.schema === 'cell-level-v1' ? 'logistic' : (m.algorithm ?? (m.cnn && m.gbm ? 'ensemble' : m.cnn ? 'cnn' : m.gbm ? 'gbm' : 'unknown'));
-    return {
-      ...feedbackCounts(), modelVersion: m?.version ?? null, userTuned: Boolean(m),
-      modelAlgorithm, modelHasCnn: Boolean(m?.cnn), modelHasGbm: Boolean(m?.gbm),
-      modelTrainedAt: m?.training?.trainedAt ?? null,
-      modelValidation: m?.training?.validation ?? null,
-      componentValidation: m?.training?.componentValidation ?? null,
-      modelCellBuffer: m?.cellBuffer ?? 0,
-    };
-  };
+  const feedbackState = () => ({ ...feedbackCounts() });
   app.get('/api/feedback', (_req, res) => {
     try { res.json({ ...feedbackState(), items: listFeedback() }); } catch (err) { res.status(500).json({ error: err instanceof Error ? err.message : 'Could not read feedback.' }); }
   });
@@ -573,61 +559,8 @@ async function startServer() {
     if (!isClassifierMode(req.params.mode)) { res.status(400).json({ error: 'Unknown model (use cls or det).' }); return; }
     res.type('text/plain').attachment(`crack-${req.params.mode}-training.log`).send(classifierLogText(req.params.mode));
   });
-  app.get('/api/train/status', (_req, res) => { res.setHeader('Cache-Control', 'no-store'); res.json(getCrackTrainingJobState()); });
-  app.get('/api/train/metrics.csv', (_req, res) => { res.type('text/csv').attachment('crack-classifier-epoch-metrics.csv').send(crackTrainingMetricsCsv()); });
-  app.get('/api/train/log', (_req, res) => { res.type('text/plain').attachment('crack-classifier-training.log').send(crackTrainingLogText()); });
-  app.post('/api/train/pause', (_req, res) => res.json(pauseCrackTraining()));
-  app.post('/api/train/resume', (_req, res) => res.json(resumeCrackTraining()));
-  app.post('/api/train/abort', (_req, res) => res.json(abortCrackTraining()));
-  app.post('/api/train', (req, res) => {
-    try {
-      if (isCrackTrainingActive()) { res.status(409).json({ error: 'Crack-classifier training is already running.', ...getCrackTrainingJobState() }); return; }
-      const current = getTrainingSettings();
-      const settings = req.body && typeof req.body === 'object' ? saveTrainingSettings({ ...current, crackClassifier: { ...current.crackClassifier, ...req.body } }).crackClassifier : current.crackClassifier;
-      const jobId = randomUUID();
-      const initial = beginCrackTrainingJob(jobId, settings.algorithm, settings.cnnEpochs, `Queued ${settings.algorithm} classifier training.`);
-      res.status(202).json(initial);
-      void (async () => {
-        try {
-          appendCrackTrainingLog(`Dataset validation started. Algorithm=${settings.algorithm}; CNN epochs=${settings.cnnEpochs}; GBM trees=${settings.gbmTrees}.`);
-          const report = await trainFromFeedback(settings, (event) => {
-            const activeStatus = event.stage === 'preparing' ? 'preparing' : event.stage === 'validation' ? 'validating' : 'training';
-            updateCrackTrainingJob({
-              status: activeStatus, stage: event.stage, progress: event.progress, message: event.message,
-              ...(event.epoch !== undefined ? { epoch: event.epoch } : {}),
-              ...(event.epochs !== undefined ? { epochs: event.epochs } : {}),
-              ...(event.tree !== undefined ? { tree: event.tree } : {}),
-              ...(event.trees !== undefined ? { trees: event.trees } : {}),
-              ...(event.samples !== undefined ? { samples: event.samples } : {}),
-              ...(event.trainingSamples !== undefined ? { trainingSamples: event.trainingSamples } : {}),
-              ...(event.validationSamples !== undefined ? { validationSamples: event.validationSamples } : {}),
-            });
-            appendCrackTrainingLog(event.message);
-            if (event.metric) {
-              addCrackEpochMetric({
-                epoch: event.metric.epoch, trainLoss: event.metric.loss, validationLoss: event.metric.validationLoss,
-                precision: event.metric.precision, recall: event.metric.recall, specificity: event.metric.specificity,
-                balancedAccuracy: event.metric.balancedAccuracy, f1: event.metric.f1, component: 'CNN',
-              });
-              appendCrackTrainingLog(`CNN epoch ${event.metric.epoch}: train_loss=${event.metric.loss.toFixed(5)}; validation_loss=${event.metric.validationLoss.toFixed(5)}; precision=${event.metric.precision.toFixed(4)}; recall=${event.metric.recall.toFixed(4)}; specificity=${event.metric.specificity.toFixed(4)}; F1=${event.metric.f1.toFixed(4)}; balanced_accuracy=${event.metric.balancedAccuracy.toFixed(4)}.`);
-            }
-          }, crackTrainingControl);
-          appendCrackTrainingLog(`Training finished. accepted=${report.accepted}; algorithm=${report.algorithm}; train samples=${report.samples}; held-out images=${report.validationImages}; held-out balanced accuracy=${report.validationAfter.balancedAccuracy}.`);
-          updateCrackTrainingJob({ status: 'completed', stage: 'completed', progress: 100, message: report.accepted ? 'Held-out validation passed; the new crack classifier was activated.' : 'Training completed, but the candidate did not pass validation; the previous active model was retained.', finishedAt: new Date().toISOString(), pid: undefined, report: report as unknown as Record<string, any> });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Crack-classifier training failed.';
-          const stack = error instanceof Error ? error.stack ?? message : String(error);
-          appendCrackTrainingLog(`ERROR: ${message}`);
-          if (stack && stack !== message) appendCrackTrainingLog(stack);
-          updateCrackTrainingJob({ status: 'failed', stage: 'failed', message: 'Crack-classifier training failed. See the saved error and log.', error: message, errorTraceback: stack, finishedAt: new Date().toISOString(), pid: undefined });
-        }
-      })();
-    } catch (err: unknown) {
-      res.status(400).json({ error: err instanceof Error ? err.message : 'Could not start crack-classifier training.' });
-    }
-  });
   app.delete('/api/train/reset', (_req, res) => {
-    try { clearFeedbackDataset(); resetUserModel(); res.json(feedbackState()); } catch (err) { res.status(500).json({ error: err instanceof Error ? err.message : 'Reset failed.' }); } // fs errors (e.g. Windows locked files)
+    try { clearFeedbackDataset(); res.json(feedbackState()); } catch (err) { res.status(500).json({ error: err instanceof Error ? err.message : 'Reset failed.' }); } // fs errors (e.g. Windows locked files)
   });
 
   // Analyze single image frame (used for individual uploads, folder files, and client-streamed zip entries).

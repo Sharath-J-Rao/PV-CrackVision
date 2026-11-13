@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dir = path.join(root, 'resources', 'models');
-const FILES = ['cell.onnx', 'cellCrackModel.user.json', 'cellClassifier.onnx', 'cellClassifier.json']; // classifier pair added v1.4.15.1
+const FILES = ['cell.onnx', 'cellClassifier.onnx', 'cellClassifier.json']; // classifier pair added v1.4.15.1
 const pkgVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 const digits = (v) => (String(v).match(/\d+/g) ?? []).map(Number);
 const cmp = (a, b) => { const x = digits(a), y = digits(b); for (let i = 0; i < Math.max(x.length, y.length); i++) { const d = (x[i] ?? 0) - (y[i] ?? 0); if (d) return Math.sign(d); } return 0; };

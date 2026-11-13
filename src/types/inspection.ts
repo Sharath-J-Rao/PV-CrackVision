@@ -191,8 +191,8 @@ export interface DetectedAnomaly {
   outerRing?: boolean;
   /** v1.4.14: option-B shadow detector flags this cell too. Absent when the shadow model did not run. Informational only. */
   shadowAgree?: boolean;
-  /** v1.4.14: which engine scored this cell ('classifier' = pretrained crop classifier, 'legacy' = old boosted-tree/CNN model). */
-  engine?: 'classifier' | 'legacy';
+  /** v1.4.14: which engine scored this cell ('classifier' = pretrained crop classifier). */
+  engine?: 'classifier';
 }
 
 export interface TileDiagnostic {

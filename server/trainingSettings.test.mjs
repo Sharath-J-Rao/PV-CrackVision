@@ -9,14 +9,15 @@ test('training settings provide complete independent model defaults', () => {
   assert.equal(settings.cellDetector.freeze, 0);
   assert.equal(settings.cellDetector.optimizer, 'AdamW');
   assert.equal(settings.cellDetector.minimumMap50, 0.05);
-  assert.equal(settings.crackClassifier.iterations, 1400);
-  assert.equal(settings.crackClassifier.classBalance, true);
+  assert.equal(settings.crackClassifier.cellBuffer, 0.03);
+  assert.equal(settings.workflow.autoDetectOnUpload, true); // v1.4.15.1: on by default
+  assert.equal(normalizeTrainingSettings({ workflow: { autoDetectOnUpload: false } }).workflow.autoDetectOnUpload, false);
 });
 
 test('training settings clamp invalid values and reject unsupported image sizes and optimizers', () => {
   const settings = normalizeTrainingSettings({
     cellDetector: { epochs: 9999, patience: 9999, imageSize: 123, freeze: -8, batch: 0, optimizer: 'Bogus', lr0: -1 },
-    crackClassifier: { iterations: 1, validationFraction: 0.99, thresholdMin: 0.7, thresholdMax: 0.2, thresholdStep: 0 },
+    crackClassifier: { cellBuffer: 5 },
   });
   assert.equal(settings.cellDetector.epochs, 500);
   assert.equal(settings.cellDetector.patience, 500);
@@ -26,8 +27,5 @@ test('training settings clamp invalid values and reject unsupported image sizes 
   assert.equal(settings.cellDetector.optimizer, 'AdamW');
   assert.equal(settings.cellDetector.minimumMap50, 0.05);
   assert.equal(settings.cellDetector.lr0, 0.000001);
-  assert.equal(settings.crackClassifier.iterations, 100);
-  assert.equal(settings.crackClassifier.validationFraction, 0.4);
-  assert.ok(settings.crackClassifier.thresholdMax > settings.crackClassifier.thresholdMin);
-  assert.equal(settings.crackClassifier.thresholdStep, 0.005);
+  assert.equal(settings.crackClassifier.cellBuffer, 0.1);
 });

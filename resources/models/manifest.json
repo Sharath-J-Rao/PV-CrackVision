@@ -1,16 +1,11 @@
 {
-  "modelVersion": "cell-ensemble-v1.4.15-0-20261113-cls",
-  "minAppVersion": "1.4.15-0",
-  "generatedAt": "2026-11-13T05:24:29.727Z",
+  "modelVersion": "cell-ensemble-v1.4.15-1-20261113",
+  "minAppVersion": "1.4.15-1",
+  "generatedAt": "2026-11-13T12:57:29.111Z",
   "files": {
     "cell.onnx": {
       "sha256": "0360cc2f8592dcb3664a9ed9f5a6d4209f9b8cf2f7c6e8c146bb4005ab27fdb3",
       "size": 11967837
-    },
-    "cellCrackModel.user.json": {
-      "sha256": "f68b2fe9e7fde7bb5582949a74ab04b316a0fb1b52a8ea8ad75148e38498cd2a",
-      "size": 1240939,
-      "schema": "cell-level-v2"
     },
     "cellClassifier.onnx": {
       "sha256": "48d484c0acfa9b9cb1d561e12d371832099af87c80787cd85c6d86d0bd7fc0b7",

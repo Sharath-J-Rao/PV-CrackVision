@@ -14,7 +14,6 @@ import {
 } from 'lucide-react';
 import { InspectionCanvas, type CellAnnotationInput, type CellBoxSaveContext } from './components/InspectionCanvas';
 import { CellTrainingMonitor } from './components/CellTrainingMonitor';
-import { CrackTrainingMonitor } from './components/CrackTrainingMonitor';
 import { ClassifierTrainingPanel } from './components/ClassifierTrainingPanel';
 import { ForensicDrawer } from './components/ForensicDrawer';
 import { MarkedImagesView, type MarkedFrame } from './components/MarkedImagesView';
@@ -29,11 +28,8 @@ import {
   resetModel,
   sendFeedbackBatch,
   getExistingImageFeedback,
-  trainModel,
-  getCrackTrainingStatus,
   withAnomalies,
   type FeedbackSummary,
-  type CrackTrainingJobStatus,
 } from './utils/feedback';
 import { CELL_IMAGE_SIZES } from './types/trainingSettings';
 import type { TrainingSettings, CellDetectorTrainingSettings, CrackClassifierTrainingSettings, CellInferenceSettings, CellTypeFilterSettings, CellTypeProfile, CrackDetectionSettings, CrackNetSettings } from './types/trainingSettings';
@@ -187,6 +183,7 @@ export default function App() {
   // v1.4.11.3: working mode of the Inspection tab.
   const [inspectionMode, setInspectionMode] = useState<'cells' | 'cracks' | 'review'>('cells');
   const [cellBatchRunning, setCellBatchRunning] = useState(false);
+  const [autoDetectRequest, setAutoDetectRequest] = useState<{ ids: string[] } | null>(null); // v1.4.15.1: freshly uploaded frames waiting for auto detection
   const [cellSingleRunning, setCellSingleRunning] = useState(false);
   const [config, setConfig] = useState<InspectionConfig>({
     tileSizePx: 1360,
@@ -524,7 +521,8 @@ export default function App() {
       selectAnomaly(null);
       setDetectionMode('cells');
       setActiveTab('detections');
-      void restoreReviewedFrames(created); // v1.4.12.6: bring back reviewed work for images seen in an earlier session
+      // v1.4.12.6: bring back reviewed work for images seen in an earlier session, then (v1.4.15.1) let auto-detection handle what is left.
+      void Promise.resolve(restoreReviewedFrames(created)).finally(() => setAutoDetectRequest({ ids: created.map((frame) => frame.id) }));
     },
     [restoreReviewedFrames]
   );
@@ -652,9 +650,6 @@ export default function App() {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [folderBannerDismissed, setFolderBannerDismissed] = useState(() => { try { return localStorage.getItem('pvcv.folderBannerDismissed') === '1'; } catch { return false; } });
   const [negativeUploadBusy, setNegativeUploadBusy] = useState(false);
-  const [training, setTraining] = useState<boolean>(false);
-  const [crackTrainingJob, setCrackTrainingJob] = useState<CrackTrainingJobStatus | null>(null);
-  const crackTrainingNoticeJobRef = useRef<string>('');
   const [markedBusy, setMarkedBusy] = useState<boolean>(false);
   const errMsg = (e: unknown, fallback: string) => (e instanceof Error ? e.message : fallback);
 
@@ -664,7 +659,6 @@ export default function App() {
     fetch('/api/cell-training/status').then((response) => response.json()).then(setCellTrainingStatus).catch((error) => setCellTrainingStatus({ status: 'not_ready', statusPollError: error instanceof Error ? error.message : 'Could not read the training status from the local server.' }));
     fetch('/api/training-settings', { cache: 'no-store' }).then((response) => response.json()).then((loaded) => { lastSavedSettings.current = JSON.stringify(loaded); setTrainingSettings(loaded); setSettingsSync('saved'); }).catch(() => undefined);
     fetch('/api/app/info', { cache: 'no-store' }).then((response) => response.json()).then(setAppInfo).catch(() => undefined);
-    getCrackTrainingStatus().then((job) => { setCrackTrainingJob(job); setTraining(['preparing', 'training', 'validating', 'paused'].includes(job.status)); }).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -677,29 +671,6 @@ export default function App() {
     }, 2000);
     return () => window.clearInterval(timer);
   }, [cellTrainingStatus?.status]);
-
-  useEffect(() => {
-    if (!crackTrainingJob || !['preparing', 'training', 'validating', 'paused'].includes(crackTrainingJob.status)) return;
-    const timer = window.setInterval(() => {
-      getCrackTrainingStatus().then((job) => {
-        setCrackTrainingJob(job);
-        const active = ['preparing', 'training', 'validating', 'paused'].includes(job.status);
-        setTraining(active);
-        if (!active && job.jobId && crackTrainingNoticeJobRef.current === job.jobId) {
-          crackTrainingNoticeJobRef.current = '';
-          getFeedbackSummary().then(setFeedback).catch(() => undefined);
-          if (job.status === 'completed' && job.report) {
-            const report = job.report;
-            const pct = (value: number) => `${Math.round(value * 100)}%`;
-            flash(report.accepted
-              ? `${report.algorithm ?? 'Crack'} classifier trained and activated.${report.classWeights?.enabled ? ` Class weights: cracked ×${report.classWeights.positiveWeight}, clean ×${report.classWeights.negativeWeight} (clean:cracked ${report.classWeights.imbalanceRatio ?? 'n/a'}:1).` : ''}${report.missedCrackSamples ? ` ${report.missedCrackSamples} missed-crack label(s) used with extra weight.` : ''} ${report.evaluationSet === 'model-selection-validation' ? 'Model-selection validation (not an independent test)' : 'Held-out'} precision ${pct(report.validationAfter.precision)}, recall ${pct(report.validationAfter.recall)}, specificity ${pct(report.validationAfter.specificity)}, F1 ${pct(report.validationAfter.f1 ?? 0)}, balanced accuracy ${pct(report.validationAfter.balancedAccuracy)}.`
-              : `Training completed, but the candidate did not pass the validation gate. Previous active model retained. ${report.reason ?? ''}`, 14000);
-          } else if (job.status === 'failed') flash(job.error || 'Crack-classifier training failed. Open the training log for details.', 16000);
-        }
-      }).catch(() => undefined);
-    }, 1200);
-    return () => window.clearInterval(timer);
-  }, [crackTrainingJob?.status, crackTrainingJob?.jobId, flash]);
 
   const changeCellDetectorMode = async (mode: string) => {
     try {
@@ -978,6 +949,37 @@ export default function App() {
     setTimeout(() => { void startBatchProcessing(reset); }, 0);
   };
 
+  // v1.4.15.1: auto-start cell detection, then crack detection, for freshly uploaded images (Training Settings > Workflow). Frames whose reviewed
+  // work was restored are left alone; only images without a finished cell detection (and later without a crack result) are processed.
+  useEffect(() => {
+    if (!autoDetectRequest) return;
+    const ids = new Set(autoDetectRequest.ids);
+    setAutoDetectRequest(null);
+    if (!trainingSettings?.workflow.autoDetectOnUpload) return;
+    void (async () => {
+      const cellTargets = framesRef.current.filter((frame) => ids.has(frame.id) && frame.imageSrc && frame.cellDetection?.status !== 'completed');
+      if (cellTargets.length) {
+        flash(`Auto-detect: starting cell detection for ${cellTargets.length} image(s).`, 6000);
+        setCellBatchRunning(true);
+        let cursor = 0;
+        const worker = async () => { while (cursor < cellTargets.length) await detectCellsForFrame(cellTargets[cursor++]); };
+        try { await Promise.all(Array.from({ length: Math.min(2, cellTargets.length) }, () => worker())); } finally { setCellBatchRunning(false); }
+      }
+      const crackTargets = framesRef.current.filter((frame) => ids.has(frame.id) && frame.imageSrc && frame.cellDetection?.status === 'completed' && !frame.result);
+      if (!crackTargets.length) return;
+      if (batchRunning) { flash('Auto-detect: cell detection finished; crack detection was not started because a crack run is already in progress.', 9000); return; }
+      flash(`Auto-detect: starting crack detection for ${crackTargets.length} image(s).`, 6000);
+      const reset = crackTargets.map((frame) => ({ ...frame, status: 'queued' as const, result: null, errorMessage: undefined, crackReviewed: false, crackStale: false }));
+      const resetById = new Map(reset.map((frame) => [frame.id, frame]));
+      const nextFrames = framesRef.current.map((frame) => resetById.get(frame.id) ?? frame);
+      framesRef.current = nextFrames;
+      setFrames(nextFrames);
+      setDetectionMode('cracks');
+      void startBatchProcessing(reset);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoDetectRequest]);
+
   // v1.4.10: crack detection for the selected image only (mirrors "Run selected image only" for cells).
   const runCrackDetectionForSelected = async () => {
     const target = framesRef.current.find((frame) => frame.id === activeFrameId && frame.imageSrc);
@@ -1198,21 +1200,8 @@ export default function App() {
     getFeedbackSummary().then(setFeedback).catch(() => undefined);
   };
 
-  const handleTrain = async () => {
-    setTraining(true);
-    try {
-      const job = await trainModel(trainingSettings?.crackClassifier);
-      setCrackTrainingJob(job);
-      crackTrainingNoticeJobRef.current = job.jobId ?? '';
-      flash(`Crack-classifier training started (${job.algorithm ?? trainingSettings?.crackClassifier.algorithm ?? 'configured model'}). Live progress, epoch analytics and logs are shown below.`, 9000);
-    } catch (e) {
-      setTraining(false);
-      flash(errMsg(e, 'Could not start crack-classifier training.'));
-    }
-  };
-
   const handleResetModel = async () => {
-    const confirmed = window.confirm('Permanently clear all saved positive/negative cell labels, feedback source images, and the trained cell model? This cannot be undone.');
+    const confirmed = window.confirm('Permanently clear all saved positive/negative cell labels and feedback source images? Trained models are kept. This cannot be undone.');
     if (!confirmed) return;
     try {
       setFeedback(await resetModel());
@@ -1223,7 +1212,7 @@ export default function App() {
       });
       selectAnomaly(null);
       setFocusedTile(null);
-      flash('Training data and trained model cleared. The next training run will start from zero weights.');
+      flash('Crack training data cleared. Trained models were kept.');
     } catch (e) {
       flash(errMsg(e, 'Reset failed.'));
     }
@@ -2516,12 +2505,7 @@ export default function App() {
                 {feedback && <div className="grid grid-cols-3 gap-2"><div className="rounded-lg bg-[#0b0b11] p-3"><div className="text-xl text-slate-100">{feedback.positives}</div><div className="text-[11px] text-slate-500">Cracked</div></div><div className="rounded-lg bg-[#0b0b11] p-3"><div className="text-xl text-slate-100">{feedback.negatives}</div><div className="text-[11px] text-slate-500">Clean</div></div><div className="rounded-lg bg-[#0b0b11] p-3"><div className="text-xl text-slate-100">{feedback.images}</div><div className="text-[11px] text-slate-500">Images</div></div></div>}
                 {feedback && <div className="text-xs text-slate-400">{feedback.trainingReady ? 'Training requirements met.' : `More reviewed labels required: ${feedback.trainingMissing.join(' · ')}`}</div>}
                 <ClassifierTrainingPanel embedded />
-                <details className="rounded-lg border border-[#2a1d33] bg-[#0d0811] p-3 space-y-3">
-                  <summary className="cursor-pointer text-xs font-semibold text-slate-200">Legacy boosted-tree / CNN classifier <span className="font-normal text-slate-400">· {feedback?.userTuned ? 'Trained' : 'Not trained'} · used only while A is not trained</span></summary>
-                  <p className="mt-2 text-[11px] text-slate-400">The previous classifier stays available as the fallback. Its own epoch analytics and log are below.</p>
-                  <div className="flex flex-wrap items-center gap-2"><button type="button" disabled={training || !feedback?.trainingReady} onClick={() => void handleTrain()} className="px-4 py-2 rounded-lg bg-emerald-500/15 border border-emerald-700/60 text-emerald-100 text-xs disabled:opacity-40">{training ? 'Training…' : 'Train crack classifier'}</button><button type="button" disabled={training || !feedback || feedback.total === 0} onClick={() => void handleResetModel()} className="px-4 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-xs disabled:opacity-40">Clear crack dataset + model</button></div>
-                <CrackTrainingMonitor job={crackTrainingJob} feedback={feedback} training={training} />
-                </details>
+                <div><button type="button" disabled={!feedback || feedback.total === 0} onClick={() => void handleResetModel()} className="px-4 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-xs disabled:opacity-40">Clear crack dataset</button></div>
               </section>
             </div>
             <p className="text-[11px] text-slate-500">Validation is performed on held-out source images. A model should only be activated after its validation has completed successfully. The existing crack classifier and YOLO cell detector are separate model families.</p>
@@ -2540,6 +2524,10 @@ export default function App() {
             </header>
             {!trainingSettings && <div className="rounded-lg border border-amber-800/60 bg-amber-950/20 p-4 text-sm text-amber-100">Could not load training settings from the local server. Refresh the page after checking that PV CrackVision is running.</div>}
             {trainingSettings && <>
+              <section className="rounded-xl border border-emerald-900/50 bg-[#0b1511] p-5 space-y-3">
+                <div><h2 className="text-lg font-semibold text-emerald-100">00 · Workflow</h2><p className="mt-1 text-xs text-slate-400">v1.4.15.1: choose whether detection starts on its own once images are uploaded.</p></div>
+                {toggleField('Auto-start detections after upload', trainingSettings.workflow.autoDetectOnUpload, (v) => setTrainingSettings((current) => current ? { ...current, workflow: { ...current.workflow, autoDetectOnUpload: v } } : current), 'When on, cell detection starts as soon as images finish uploading and crack detection follows automatically for every image whose cell detection completed. Turn off to start both stages manually from the Detections tab.')}
+              </section>
               <section className="rounded-xl border border-cyan-900/60 bg-[#0b1420] p-5 space-y-4">
                 <div><h2 className="text-lg font-semibold text-cyan-100">01 · Cell detector — YOLO11n</h2><p className="mt-1 text-xs text-slate-400">Detection training, transfer learning, optimizer, loss weights and augmentation parameters. The runtime is CPU-only in this release.</p></div>
                 <div className="rounded-lg border border-emerald-900/60 bg-emerald-950/20 p-3 text-xs text-emerald-100"><strong>Early stopping:</strong> patience 0 (the default) disables automatic early stopping, so training continues to the configured epoch count unless you press Cancel or a real worker/system failure occurs. Set patience above 0 only when you explicitly want plateau-based early stopping. The validation activation threshold never stops the training loop.</div>
@@ -2589,40 +2577,15 @@ export default function App() {
               </section>
 
               <section className="rounded-xl border border-rose-900/50 bg-[#120e14] p-5 space-y-4">
-                <div><h2 className="text-lg font-semibold text-rose-100">02 · Crack classifier</h2><p className="mt-1 text-xs text-slate-400">v1.4.8.7: every sample is one cell crop. <strong>Gradient boosting</strong> runs on richer features (edge orientation + crack continuity) and a <strong>small CNN</strong> runs on the cell crop itself; the ensemble averages both. Boosting trains in seconds; the CNN adds a few minutes. The legacy logistic model remains selectable.</p></div>
-                <div className="rounded-lg border border-amber-900/60 bg-amber-950/20 p-3 text-xs text-amber-100"><strong>Freeze layers do not apply here.</strong> There are no convolutional/backbone layers in this classifier. The controls below are its actual optimization and validation parameters.</div>
+                <div><h2 className="text-lg font-semibold text-rose-100">02 · Crack classifier</h2><p className="mt-1 text-xs text-slate-400">v1.4.15.1: the pretrained crop classifier is the only crack engine. Its training parameters are in the Training Centre (crack models A and B); the values below tune detection and how reviewed labels are weighted.</p></div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  {selectField('Classifier', trainingSettings.crackClassifier.algorithm, [
-                    { value: 'ensemble', label: 'Ensemble — gradient boosting + small CNN (recommended)' },
-                    { value: 'gbm', label: 'Gradient boosting only (fastest)' },
-                    { value: 'cnn', label: 'Small CNN only' },
-                    { value: 'logistic', label: 'Legacy logistic regression (v1.4.8.6)' },
-                  ], (v) => updateCrackTrainingSetting('algorithm', v))}
-                  {numberField('Boosting trees', trainingSettings.crackClassifier.gbmTrees, (v) => updateCrackTrainingSetting('gbmTrees', v), 10, 1000, 10)}
-                  {numberField('Boosting tree depth', trainingSettings.crackClassifier.gbmDepth, (v) => updateCrackTrainingSetting('gbmDepth', v), 1, 8, 1)}
-                  {numberField('Boosting learning rate', trainingSettings.crackClassifier.gbmLearningRate, (v) => updateCrackTrainingSetting('gbmLearningRate', v), 0.005, 0.5, 0.005)}
-                  {numberField('Boosting min samples per leaf', trainingSettings.crackClassifier.gbmMinLeaf, (v) => updateCrackTrainingSetting('gbmMinLeaf', v), 1, 50, 1)}
-                  {numberField('Boosting row subsample', trainingSettings.crackClassifier.gbmSubsample, (v) => updateCrackTrainingSetting('gbmSubsample', v), 0.3, 1, 0.05)}
                   {numberField('Cell crop buffer (fraction of cell, 0 = off)', trainingSettings.crackClassifier.cellBuffer, (v) => updateCrackTrainingSetting('cellBuffer', v), 0, 0.1, 0.005)}
-                  {numberField('CNN epochs', trainingSettings.crackClassifier.cnnEpochs, (v) => updateCrackTrainingSetting('cnnEpochs', v), 1, 200, 1)}
-                  {numberField('CNN early-stop patience', trainingSettings.crackClassifier.cnnEarlyStopPatience, (v) => updateCrackTrainingSetting('cnnEarlyStopPatience', v), 0, 100, 1, 'Stop after this many epochs without a better held-out balanced accuracy; the weights of the best epoch are restored. 0 = run all epochs (best epoch still restored).')}
                   {numberField('Perimeter cells: threshold drop', trainingSettings.crackClassifier.edgeThresholdDrop, (v) => updateCrackTrainingSetting('edgeThresholdDrop', v), 0, 0.4, 0.01, 'Cells on the outer ring of a module\'s detected cell grid use (decision threshold − this value), so borderline cracks there are caught and listed first. Set 0 to give them the same bar as interior cells.')}
-                  {toggleField('Outer-ring cells: require both models to agree', trainingSettings.crackClassifier.edgeRequireAgreement, (v) => updateCrackTrainingSetting('edgeRequireAgreement', v), 'Cells on the outer ring of the detected cell grid are reported only when the boosting model AND the CNN each reach (decision threshold − perimeter drop), not just their average. Cuts false positives at module edges, gaps and frames; turn off to use the average only.')}
+                  {toggleField('Outer-ring cells: require every view to agree', trainingSettings.crackClassifier.edgeRequireAgreement, (v) => updateCrackTrainingSetting('edgeRequireAgreement', v), 'Cells on the outer ring of the detected cell grid are reported only when the original view AND every flipped view each reach (decision threshold − perimeter drop), not just their average. Cuts false positives at module edges, gaps and frames; turn off to use the average only.')}
                   {numberField('Perimeter cells: training weight', trainingSettings.crackClassifier.edgeSampleWeight, (v) => updateCrackTrainingSetting('edgeSampleWeight', v), 1, 10, 0.5, 'Training weight multiplier for module-perimeter cells (1 = off).')}
                   {numberField('Rejected detections: training weight', trainingSettings.crackClassifier.hardNegativeWeight, (v) => updateCrackTrainingSetting('hardNegativeWeight', v), 1, 10, 0.5, 'Cells you delete as false detections in review are trained as negatives with this extra weight.')}
                   {numberField('Missed cracks: training weight', trainingSettings.crackClassifier.missedCrackWeight, (v) => updateCrackTrainingSetting('missedCrackWeight', v), 1, 10, 0.5, 'Cells you label Cracked after a crack scan where the model found nothing are trained as positives with this extra weight, so the model learns not to miss cracks like them.')}
-                  {numberField('CNN learning rate', trainingSettings.crackClassifier.cnnLearningRate, (v) => updateCrackTrainingSetting('cnnLearningRate', v), 0.0001, 0.05, 0.001)}
-                  {numberField('CNN batch size', trainingSettings.crackClassifier.cnnBatchSize, (v) => updateCrackTrainingSetting('cnnBatchSize', v), 4, 128, 4)}
-                  {numberField('Gradient iterations (logistic only)', trainingSettings.crackClassifier.iterations, (v) => updateCrackTrainingSetting('iterations', v), 100, 50000, 100)}
-                  {numberField('Learning rate', trainingSettings.crackClassifier.learningRate, (v) => updateCrackTrainingSetting('learningRate', v), 0.000001, 1, 0.001)}
-                  {numberField('L2 regularization', trainingSettings.crackClassifier.l2, (v) => updateCrackTrainingSetting('l2', v), 0, 10, 0.001)}
-                  {numberField('Validation fraction', trainingSettings.crackClassifier.validationFraction, (v) => updateCrackTrainingSetting('validationFraction', v), 0.1, 0.4, 0.05)}
-                  {numberField('Threshold minimum', trainingSettings.crackClassifier.thresholdMin, (v) => updateCrackTrainingSetting('thresholdMin', v), 0.05, 0.8, 0.01)}
-                  {numberField('Threshold maximum', trainingSettings.crackClassifier.thresholdMax, (v) => updateCrackTrainingSetting('thresholdMax', v), 0.2, 0.95, 0.01)}
-                  {numberField('Threshold search step', trainingSettings.crackClassifier.thresholdStep, (v) => updateCrackTrainingSetting('thresholdStep', v), 0.005, 0.2, 0.005)}
-                  {numberField('Minimum held-out balanced accuracy', trainingSettings.crackClassifier.minimumBalancedAccuracy, (v) => updateCrackTrainingSetting('minimumBalancedAccuracy', v), 0.5, 0.95, 0.01)}
                 </div>
-                {toggleField('Balance positive and negative classes', trainingSettings.crackClassifier.classBalance, (v) => updateCrackTrainingSetting('classBalance', v), 'Cracked and clean cells carry equal total training weight in every classifier (boosting, CNN, logistic), including after the edge-cell and hard-negative multipliers; the ratio and weights used are recorded in the training report.')}
               </section>
 
               <section className="rounded-xl border border-amber-900/50 bg-[#15120b] p-5 space-y-3">

@@ -2,8 +2,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cellGridBounds, isGridEdgeCell, isPerimeterCell } from './cellPriority.ts';
-import { scoreCell, scoreCellDetailed } from './crackModel.ts';
-import { gbmProbability } from './gradientBoosting.ts';
 import { DEFAULT_TRAINING_SETTINGS, normalizeTrainingSettings } from './trainingSettings.ts';
 
 // 6 x 4 grid of 40 px cells starting at (100, 100): grid outline is 240 x 160.
@@ -34,18 +32,6 @@ test('the grid ring does not depend on how loose or tight the module region box 
   assert.equal(isPerimeterCell(ring2, tightRegion), true, 'region ring pulls in ring 2 when the box is tight');
   assert.equal(isGridEdgeCell(outer, grid), true);
   assert.equal(isGridEdgeCell(ring2, grid), false);
-});
-
-test('scoreCellDetailed matches scoreCell and exposes every component probability', () => {
-  const gbm = { featureCount: 1, baseScore: 0, learningRate: 1, trees: [[{ f: 0, t: 0.5, l: 1, r: 2, v: 0 }, { f: -1, t: 0, l: 0, r: 0, v: -2 }, { f: -1, t: 0, l: 0, r: 0, v: 2 }]] };
-  const model = { schema: 'cell-level-v2', gbm };
-  for (const x of [0, 1]) {
-    const detailed = scoreCellDetailed(model, [x]);
-    assert.equal(detailed.parts.length, 1);
-    assert.equal(detailed.probability, scoreCell(model, [x]));
-    assert.equal(detailed.probability, gbmProbability(gbm, [x]));
-  }
-  assert.throws(() => scoreCellDetailed({ schema: 'cell-level-v2' }, [0]), /no usable component/);
 });
 
 test('edgeRequireAgreement defaults on, survives older saved settings, and respects an explicit off', () => {

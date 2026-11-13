@@ -1,7 +1,7 @@
 {
   "name": "pv-crackvision",
   "private": true,
-  "version": "1.4.15-0",
+  "version": "1.4.15-1",
   "type": "module",
   "scripts": {
     "dev": "node scripts/run-server.mjs dev",

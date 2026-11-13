@@ -45,32 +45,11 @@ export type CellDetectorTrainingSettings = {
 };
 
 export type CrackClassifierTrainingSettings = {
-  iterations: number;
-  learningRate: number;
-  l2: number;
-  validationFraction: number;
-  thresholdMin: number;
-  thresholdMax: number;
-  thresholdStep: number;
-  minimumBalancedAccuracy: number;
-  classBalance: boolean;
   /** v1.4.9: minimal buffer (fraction of the cell short side, 0 = off) added around every detected cell box when its crop is taken, so the true cell boundary is not clipped by a slightly tight detection. */
   cellBuffer: number;
-  /** v1.4.8.7: which classifier is trained on the cell crops. 'logistic' = the legacy v1.4.8.6 model. */
-  algorithm: 'ensemble' | 'gbm' | 'cnn' | 'logistic';
-  gbmTrees: number;
-  gbmDepth: number;
-  gbmLearningRate: number;
-  gbmMinLeaf: number;
-  gbmSubsample: number;
-  cnnEpochs: number;
-  cnnLearningRate: number;
-  cnnBatchSize: number;
-  /** v1.4.10: stop CNN training after this many epochs without a better held-out balanced accuracy and restore the best epoch's weights (0 = off; best weights are still restored after the last epoch). */
-  cnnEarlyStopPatience: number;
   /** v1.4.10: module-perimeter cells use (decision threshold - this); 0 = no priority. */
   edgeThresholdDrop: number;
-  /** v1.4.12.9: outer-ring cells are only reported when EVERY classifier component (boosting and CNN) individually clears the perimeter threshold, not just their average. */
+  /** v1.4.12.9: outer-ring cells are only reported when EVERY classifier component (original + flipped views) individually clears the perimeter threshold, not just their average. */
   edgeRequireAgreement: boolean;
   /** v1.4.10: training weight multiplier for module-perimeter cells (1 = no priority). */
   edgeSampleWeight: number;
@@ -158,6 +137,8 @@ export type TrainingSettings = {
   cellTypeFilter: CellTypeFilterSettings;
   crackDetection: CrackDetectionSettings;
   crackNet: CrackNetSettings;
+  /** v1.4.15.1: workflow switches. autoDetectOnUpload = run cell detection, then crack detection, as soon as images finish uploading. */
+  workflow: { autoDetectOnUpload: boolean };
   /** v1.4.12.7: version of the built-in defaults this file was last upgraded to (see server/trainingSettings.ts). */
   defaultsVersion?: number;
 };

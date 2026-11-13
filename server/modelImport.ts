@@ -2,7 +2,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { MODEL_DATA_DIR, TRAINING_MODELS_DIR } from './dataPaths.ts';
-import { readModel, reloadCrackModel, USER_MODEL_PATH } from './crackModel.ts';
 import { resetCellDetectorSession } from './cellDetector.ts';
 
 const ACTIVE_ONNX = path.join(MODEL_DATA_DIR, 'cell.onnx');
@@ -46,14 +45,7 @@ export async function importModelFile(buffer: Buffer, rawName: string): Promise<
       return { kind: 'cell-onnx', fileName, bytes: buffer.length, warning, message: 'Cell detector model loaded and activated. The previous model was kept for roll-back.' };
     } catch (error) { try { fs.unlinkSync(temporary); } catch { /* already gone */ } throw error; }
   }
-  if (ext === '.json') {
-    const temporary = `${USER_MODEL_PATH}.import.tmp`;
-    fs.writeFileSync(temporary, buffer);
-    if (!readModel(temporary)) { try { fs.unlinkSync(temporary); } catch { /* ignore */ } throw new Error('This JSON is not a valid PV CrackVision crack classifier (schema mismatch).'); }
-    backupAndReplace(temporary, USER_MODEL_PATH, `${USER_MODEL_PATH}.previous`);
-    reloadCrackModel();
-    return { kind: 'crack-classifier', fileName, bytes: buffer.length, message: 'Crack classifier loaded and activated.' };
-  }
+  if (ext === '.json') throw new Error('The legacy crack-classifier JSON model is no longer supported (v1.4.15.1). Train the crop classifier in the Training Centre instead.');
   if (ext === '.pt') {
     if (buffer.length < 1024 || buffer[0] !== 0x50 || buffer[1] !== 0x4b) throw new Error('This does not look like a PyTorch checkpoint (.pt).');
     fs.mkdirSync(TRAINING_MODELS_DIR, { recursive: true });

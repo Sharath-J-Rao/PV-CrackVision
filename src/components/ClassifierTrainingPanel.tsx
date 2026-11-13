@@ -21,7 +21,7 @@ const CARDS: Record<Mode, { title: string; blurb: string }> = {
 
 const num = (v: unknown, d = 4) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : '—');
 
-/** v1.4.14.4: epoch analytics, held-out validation and training log for the pretrained models (replaces the legacy classifier telemetry at this spot). */
+/** v1.4.14.4: epoch analytics, held-out validation and training log for the pretrained models. */
 const CrackNetMonitor: React.FC<{ snap: Snapshot }> = ({ snap }) => {
   const [mode, setMode] = useState<Mode>('cls');
   const job = snap[mode]; const rows = job.metrics ?? []; const v = job.report?.validation as Record<string, number> | undefined;
@@ -68,7 +68,7 @@ export const ClassifierTrainingPanel: React.FC<{ embedded?: boolean }> = ({ embe
   };
   /** v1.4.14.4: remove the installed A/B models and everything their trainers generated. Reviewed labels are never touched. */
   const clearAll = async () => {
-    if (!window.confirm('Clear the pretrained crack models A and B and their generated training data (cropped/tiled datasets, runs, logs, job history)?\n\nYour reviewed cracked/clean labels and source images are kept, so you can retrain at any time. Until A is trained again, crack detection uses the legacy classifier.')) return;
+    if (!window.confirm('Clear the pretrained crack models A and B and their generated training data (cropped/tiled datasets, runs, logs, job history)?\n\nYour reviewed cracked/clean labels and source images are kept, so you can retrain at any time. Until A is trained again, crack detection uses the bundled classifier.')) return;
     setClearing(true);
     try {
       const r = await fetch('/api/classifier/clear', { method: 'POST' });
@@ -92,7 +92,7 @@ export const ClassifierTrainingPanel: React.FC<{ embedded?: boolean }> = ({ embe
       </div>
       {error && <p className="rounded-lg border border-amber-800/60 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">{error}</p>}
       {snap?.installed.warning && <p className="rounded-lg border border-amber-800/60 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">{snap.installed.warning}</p>}
-      {snap && !snap.installed.cls && <p className="text-xs text-slate-400">No classifier is trained yet: crack detection currently uses the legacy boosted-tree/CNN model. Train A to replace it.</p>}
+      {snap && !snap.installed.cls && <p className="text-xs text-slate-400">No classifier of your own is trained yet: crack detection uses the classifier bundled with the app. Train A to replace it.</p>}
       <div className="grid grid-cols-1 gap-4">
         {(['cls', 'det'] as Mode[]).map((mode) => {
           const job = snap?.[mode]; const installed = snap?.installed[mode]; const ready = snap?.readiness[mode]; const active = Boolean(job && ACTIVE.includes(job.status));
