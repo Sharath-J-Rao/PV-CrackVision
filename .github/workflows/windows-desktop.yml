@@ -71,7 +71,7 @@ jobs:
           $worker = Join-Path 'desktop-dist\win-unpacked\resources\app.asar.unpacked\training' 'train_cell_yolo.py'
           $dependencyHelper = Join-Path 'desktop-dist\win-unpacked\resources\app.asar.unpacked\training' 'install_package_dependencies.py'
           $bundledModels = 'desktop-dist\win-unpacked\resources\models'
-          foreach ($m in @('cell.onnx','cellCrackModel.user.json','manifest.json')) { if (-not (Test-Path (Join-Path $bundledModels $m))) { throw "Bundled model missing from the package: $m" } }
+          foreach ($m in @('cell.onnx','cellCrackModel.user.json','cellClassifier.onnx','cellClassifier.json','manifest.json')) { if (-not (Test-Path (Join-Path $bundledModels $m))) { throw "Bundled model missing from the package: $m" } }
           if (-not (Test-Path $worker)) { throw "YOLO Python worker was not unpacked for the external Python process: $worker" }
           if (-not (Test-Path $dependencyHelper)) { throw "Python dependency helper was not unpacked: $dependencyHelper" }
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version

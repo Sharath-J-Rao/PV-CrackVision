@@ -12,7 +12,7 @@ import { DATA_ROOT, FEEDBACK_DIR, RUNTIME_DIR, RUNTIME_MARKER } from './dataPath
 import { pythonExecutable, trainingWorkerPath } from './cellTraining.ts';
 import { listFeedback } from './feedbackStore.ts';
 import { getTrainingSettings } from './trainingSettings.ts';
-import { CLASSIFIER_META, CLASSIFIER_ONNX, getCellClassifierWarning, resetCellClassifierSession } from './cellClassifier.ts';
+import { CLASSIFIER_META, CLASSIFIER_ONNX, activeClassifierFiles, getCellClassifierWarning, resetCellClassifierSession } from './cellClassifier.ts';
 import { MODULE_META, MODULE_ONNX, resetModuleShadowSession } from './moduleShadow.ts';
 
 export type ClassifierMode = 'cls' | 'det';
@@ -113,7 +113,8 @@ export function cancelClassifierTraining(mode: ClassifierMode) {
 /** Installed model metadata for the UI (null = nothing trained yet). */
 export function installedClassifierModels(): { cls: Record<string, any> | null; det: Record<string, any> | null; warning?: string } {
   const read = (file: string, onnx: string) => { try { return fs.existsSync(onnx) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null; } catch { return null; } };
-  return { cls: read(CLASSIFIER_META, CLASSIFIER_ONNX), det: read(MODULE_META, MODULE_ONNX), warning: getCellClassifierWarning() };
+  const active = activeClassifierFiles(); // user-trained pair, else the bundled one
+  return { cls: read(active.meta, active.onnx), det: read(MODULE_META, MODULE_ONNX), warning: getCellClassifierWarning() };
 }
 
 export const classifierLogText = (mode: ClassifierMode): string => (readState(mode).log ?? []).join('\n');

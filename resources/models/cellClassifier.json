@@ -1,0 +1,29 @@
+{
+ "schema": "cell-classifier-v1",
+ "version": "cell-cls-yolo11n-cls-202611130945",
+ "imgsz": 224,
+ "classNames": [
+  "clean",
+  "cracked"
+ ],
+ "crackedIndex": 1,
+ "threshold": 0.0049,
+ "cellBuffer": 0.01,
+ "baseModel": "yolo11n-cls.pt",
+ "trainedAt": "2026-11-13T09:45:04",
+ "validation": {
+  "threshold": 0.0049,
+  "precision": 0.9,
+  "recall": 0.9558,
+  "specificity": 0.907,
+  "balancedAccuracy": 0.9314,
+  "f1": 0.927,
+  "tp": 108,
+  "fp": 12,
+  "tn": 117,
+  "fn": 5,
+  "positives": 113,
+  "negatives": 129
+ },
+ "msPerCell": 2.47
+}

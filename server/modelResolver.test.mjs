@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { resolveModel, checkBundledFile, compareVersions } from './modelResolver.ts';
+import { resolveModel, checkBundledFile, compareVersions, resolveClassifierFiles } from './modelResolver.ts';
 
 const onnx = () => Buffer.concat([Buffer.from([0x08, 0x07]), Buffer.alloc(4096, 1)]);
 const crack = () => Buffer.from(JSON.stringify({ schema: 'cell-level-v2', pad: 'x'.repeat(2000) }));
@@ -74,4 +74,25 @@ test('missing manifest or missing bundle never throws', () => {
 test('crack classifier JSON resolves the same way', () => {
   const f = fixture();
   assert.deepEqual(resolveModel('cellCrackModel.user.json', f.user, f.bundled, '1.4.13-1').candidates.map((c) => c.source), ['bundled']);
+});
+
+test('classifier pair: user pair wins, else verified bundled pair, else none', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pv-cls-'));
+  const user = path.join(root, 'user'), bundled = path.join(root, 'bundled');
+  fs.mkdirSync(user); fs.mkdirSync(bundled);
+  const meta = Buffer.from(JSON.stringify({ schema: 'cell-classifier-v1' }));
+  const entries = {};
+  for (const [n, b] of [['cellClassifier.onnx', onnx()], ['cellClassifier.json', meta]]) {
+    fs.writeFileSync(path.join(bundled, n), b);
+    entries[n] = { sha256: crypto.createHash('sha256').update(b).digest('hex'), size: b.length };
+  }
+  fs.writeFileSync(path.join(bundled, 'manifest.json'), JSON.stringify({ minAppVersion: '1.4.13-1', files: entries }));
+  assert.equal(resolveClassifierFiles(user, bundled, '1.4.15-0')?.source, 'bundled');
+  fs.writeFileSync(path.join(user, 'cellClassifier.onnx'), onnx());
+  assert.equal(resolveClassifierFiles(user, bundled, '1.4.15-0')?.source, 'bundled'); // half a user pair is ignored
+  fs.writeFileSync(path.join(user, 'cellClassifier.json'), meta);
+  assert.equal(resolveClassifierFiles(user, bundled, '1.4.15-0')?.source, 'user');
+  fs.rmSync(path.join(bundled, 'cellClassifier.json'));
+  fs.rmSync(user, { recursive: true });
+  assert.equal(resolveClassifierFiles(user, bundled, '1.4.15-0'), null);
 });

@@ -11,6 +11,7 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { MODEL_DATA_DIR } from './dataPaths.ts';
 import { bufferedCellCrop } from './crackModel.ts';
+import { resolveClassifierFiles } from './modelResolver.ts';
 
 export const CLASSIFIER_ONNX = path.join(MODEL_DATA_DIR, 'cellClassifier.onnx');
 export const CLASSIFIER_META = path.join(MODEL_DATA_DIR, 'cellClassifier.json');
@@ -48,8 +49,10 @@ export async function createOrtSession(file: string, forceCpu = false): Promise<
   throw lastError;
 }
 
+/** Files in use: the user's trained pair, else the pair bundled with the app (read-only). */
+export const activeClassifierFiles = (): { onnx: string; meta: string } => resolveClassifierFiles() ?? { onnx: CLASSIFIER_ONNX, meta: CLASSIFIER_META };
 const fingerprint = (): string | null => {
-  try { const a = fs.statSync(CLASSIFIER_ONNX), b = fs.statSync(CLASSIFIER_META); return `${a.size}:${a.mtimeMs}:${b.mtimeMs}`; } catch { return null; }
+  try { const f = activeClassifierFiles(), a = fs.statSync(f.onnx), b = fs.statSync(f.meta); return `${f.onnx}:${a.size}:${a.mtimeMs}:${b.mtimeMs}`; } catch { return null; }
 };
 let cache: { key: string; value: LoadedCellClassifier | null } | null = null;
 let lastWarning: string | undefined;
@@ -59,7 +62,7 @@ export function resetCellClassifierSession(): void { cache = null; }
 /** Validate meta before trusting it: a wrong imgsz/index would silently produce garbage probabilities. */
 function readMeta(): CellClassifierMeta | null {
   try {
-    const raw = JSON.parse(fs.readFileSync(CLASSIFIER_META, 'utf8'));
+    const raw = JSON.parse(fs.readFileSync(activeClassifierFiles().meta, 'utf8'));
     const ok = raw?.schema === 'cell-classifier-v1' && Number.isInteger(raw.imgsz) && raw.imgsz >= 32 && raw.imgsz <= 1024 &&
       Number.isInteger(raw.crackedIndex) && raw.crackedIndex >= 0 && Number.isFinite(raw.threshold) && raw.threshold > 0 && raw.threshold < 1 &&
       Number.isFinite(raw.cellBuffer) && raw.cellBuffer >= 0 && raw.cellBuffer <= 0.5;
@@ -76,7 +79,7 @@ export async function loadCellClassifier(): Promise<LoadedCellClassifier | null>
   const meta = readMeta();
   if (!meta) lastWarning = 'cellClassifier.json is missing or invalid; the classifier was ignored.';
   else {
-    try { const { session, provider } = await createOrtSession(CLASSIFIER_ONNX); value = { meta, session, provider }; lastWarning = undefined; console.log(`[Cell classifier] ${meta.version} on ${provider}`); }
+    try { const { session, provider } = await createOrtSession(activeClassifierFiles().onnx); value = { meta, session, provider }; lastWarning = undefined; console.log(`[Cell classifier] ${meta.version} on ${provider}`); }
     catch (error) { lastWarning = `Cell classifier could not load: ${error instanceof Error ? error.message : String(error)}`; }
   }
   cache = { key, value };

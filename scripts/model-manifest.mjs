@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dir = path.join(root, 'resources', 'models');
-const FILES = ['cell.onnx', 'cellCrackModel.user.json'];
+const FILES = ['cell.onnx', 'cellCrackModel.user.json', 'cellClassifier.onnx', 'cellClassifier.json']; // classifier pair added v1.4.15.1
 const pkgVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 const digits = (v) => (String(v).match(/\d+/g) ?? []).map(Number);
 const cmp = (a, b) => { const x = digits(a), y = digits(b); for (let i = 0; i < Math.max(x.length, y.length); i++) { const d = (x[i] ?? 0) - (y[i] ?? 0); if (d) return Math.sign(d); } return 0; };
@@ -40,7 +40,7 @@ export function check({ require = false } = {}) {
     if (!entry) { errors.push(`${name}: no manifest entry. Run "npm run models:manifest".`); continue; }
     if (fs.statSync(f).size !== entry.size) errors.push(`${name}: size differs from manifest.`);
     else if (sha(f) !== entry.sha256) errors.push(`${name}: checksum differs from manifest.`);
-    if (name === 'cell.onnx' && fs.readFileSync(f).subarray(0, 1)[0] !== 0x08) errors.push('cell.onnx is not an ONNX file.');
+    if (name.endsWith('.onnx') && fs.readFileSync(f).subarray(0, 1)[0] !== 0x08) errors.push('cell.onnx is not an ONNX file.');
     if (name.endsWith('.json')) { try { if (!JSON.parse(fs.readFileSync(f, 'utf8')).schema) errors.push(`${name}: no schema field.`); } catch { errors.push(`${name}: not valid JSON.`); } }
   }
   if (manifest?.minAppVersion && cmp(pkgVersion, manifest.minAppVersion) < 0) errors.push(`Models need app ${manifest.minAppVersion} or newer; this is ${pkgVersion}.`);

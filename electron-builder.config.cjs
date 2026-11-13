@@ -31,7 +31,7 @@ module.exports = {
     '!**/*.pyc',
   ],
   // v1.4.13.1: AI models live outside the asar (read by path by onnxruntime) -> <resources>/models, offline and read-only.
-  extraResources: [{ from: 'resources/models', to: 'models', filter: ['cell.onnx', 'cellCrackModel.user.json', 'manifest.json'] }],
+  extraResources: [{ from: 'resources/models', to: 'models', filter: ['cell.onnx', 'cellCrackModel.user.json', 'cellClassifier.onnx', 'cellClassifier.json', 'manifest.json'] }],
   asar: true,
   asarUnpack: [
     '**/*.node',

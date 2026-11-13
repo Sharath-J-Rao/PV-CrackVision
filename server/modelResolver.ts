@@ -43,8 +43,8 @@ function readManifest(dir: string): Manifest | null {
 
 /** Cheap structural check (no inference runtime needed). The ONNX test-load happens when the session is created. */
 function structurallyValid(name: string, file: string, stat: fs.Stats): string | null {
-  if (!stat.isFile() || stat.size < 1024) return 'file is missing its content or too small';
-  if (name === CELL_MODEL_FILE) {
+  if (!stat.isFile() || stat.size < (name.endsWith('.onnx') ? 1024 : 2)) return 'file is missing its content or too small';
+  if (name.endsWith('.onnx')) { // cell detector and cell-crop classifier are both ONNX
     const head = Buffer.alloc(1); const fd = fs.openSync(file, 'r');
     try { fs.readSync(fd, head, 0, 1, 0); } finally { fs.closeSync(fd); }
     return head[0] === 0x08 ? null : 'not an ONNX model file';
@@ -84,7 +84,17 @@ export function resolveModel(name: string, userDir: string = MODEL_DATA_DIR, bun
   return { candidates, warnings };
 }
 
-export const resolveCellModel = (): ModelResolution => resolveModel(CELL_MODEL_FILE);
+export const CLASSIFIER_ONNX_FILE = 'cellClassifier.onnx';
+export const CLASSIFIER_META_FILE = 'cellClassifier.json';
+/** The cell-crop classifier is a pair (.onnx + .json): a complete user pair wins, otherwise the verified bundled pair, otherwise null. */
+export function resolveClassifierFiles(userDir: string = MODEL_DATA_DIR, bundledDir: string = bundledModelsDir(), appVersion = APP_VERSION): { onnx: string; meta: string; source: ModelSource } | null {
+  const user = [CLASSIFIER_ONNX_FILE, CLASSIFIER_META_FILE].map((n) => path.join(userDir, n));
+  if (user.every((f) => fs.existsSync(f))) return { onnx: user[0], meta: user[1], source: 'user' };
+  const bundled = [CLASSIFIER_ONNX_FILE, CLASSIFIER_META_FILE].map((n) => checkBundledFile(n, bundledDir, appVersion));
+  return bundled.every((b) => b.ok) ? { onnx: bundled[0].path, meta: bundled[1].path, source: 'bundled' } : null;
+}
+
+export const resolveCellModel =(): ModelResolution => resolveModel(CELL_MODEL_FILE);
 export const resolveCrackModelFile = (): ModelResolution => resolveModel(CRACK_MODEL_FILE);
 
 /** Summary for /api/health, the detector status and the smoke test. */
