@@ -249,7 +249,8 @@ async function runSmokeTest(baseUrl, health) {
     const expected = process.env.PV_EXPECT_VERSION;
     if (expected && app.getVersion() !== expected) throw new Error(`Version ${app.getVersion()} != expected ${expected}`);
     const info = await (await fetch(`${baseUrl}/api/app/info`)).json();
-    if (info.version !== app.getVersion()) throw new Error(`/api/app/info reports ${info.version}, app is ${app.getVersion()}`);
+    const dotted = (v) => String(v).replace(/-(\d+)$/, '.$1'); // package.json uses 1.4.17-7, the server reports 1.4.17.7
+    if (dotted(info.version) !== dotted(app.getVersion())) throw new Error(`/api/app/info reports ${info.version}, app is ${app.getVersion()}`);
     const sharp = (await import('sharp')).default;
     const png = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#808080' } }).png().toBuffer();
     if (!png.length) throw new Error('sharp produced no output');
