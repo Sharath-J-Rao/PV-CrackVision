@@ -1,0 +1,29 @@
+{
+  "modelVersion": "2026-11-20-anomaly-v1",
+  "minAppVersion": "1.4.17-7",
+  "generatedAt": "2026-11-19T20:39:17.607Z",
+  "files": {
+    "cell.onnx": {
+      "sha256": "0360cc2f8592dcb3664a9ed9f5a6d4209f9b8cf2f7c6e8c146bb4005ab27fdb3",
+      "size": 11967837
+    },
+    "cellClassifier.onnx": {
+      "sha256": "01eb615f516018de715a651ee09b07410d5c5e492cf5306d68e3feea9a48b2f9",
+      "size": 6211501
+    },
+    "cellClassifier.json": {
+      "sha256": "606aa8537dd99ed6061035ef3699fe4f97334768ff58d6f7fb54ff785e4ca2b4",
+      "size": 18871,
+      "schema": "cell-classifier-v1"
+    },
+    "cellAnomaly.onnx": {
+      "sha256": "24d5bfc6dbe809a3df0b17b50ccf415544634f4b85a2f7b8031611aacd551e84",
+      "size": 21814445
+    },
+    "cellAnomaly.json": {
+      "sha256": "29266949d4acf8623a07c702e2538a2d1b5dfbe797e6910283a61d2975117d0c",
+      "size": 63976,
+      "schema": "cell-anomaly-v1"
+    }
+  }
+}
