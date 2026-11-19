@@ -1,3 +1,5 @@
+## v1.4.17.8 - CPU speed gate for the anomaly crack model
+
 ## v1.4.17.7 - recover models from earlier versions, GPU crack detection/training, Crack Training Data tab
 
 - **Fix: trained model from the previous version was not used.** The one-time legacy migration only scanned sibling releases inside the Working Folder, copied by "newer file wins", remembered files forever and could copy a pair's `.onnx` and `.json` from different releases. New `server/modelRecovery.ts` runs on every start (and on demand) over every known location (active models folder, Working Folder/parent/user `data/models`, each earlier release's `server/models` and `data/models`), validates complete pairs (`cellAnomaly`, `cellClassifier`, and `cell.onnx` only if missing) and installs the newest one when the active folder has none or an older one. Pairs are copied `.onnx` first, `.json` last; replaced files are kept as `*.before-recovery`; sources are never touched.

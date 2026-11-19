@@ -37,7 +37,7 @@ export const DEFAULT_TRAINING_SETTINGS: TrainingSettings = {
       { id: 'half-cut', name: 'Half-cut cell (2:1)', mode: 'accept', enabled: false, aspect: 2.0, aspectTolerance: 0.25, minLongPx: 0, maxLongPx: 0 },
     ],
   },
-  crackDetection: { groundMaxSoilFraction: 0.3, groundMinPvFraction: 0.5, groundMinPvFractionFallback: 0.25, decisionThreshold: 0, lowConfidenceThreshold: 90, engine: 'anomaly' },
+  crackDetection: { groundMaxSoilFraction: 0.3, groundMinPvFraction: 0.5, groundMinPvFractionFallback: 0.25, decisionThreshold: 0, lowConfidenceThreshold: 90, engine: 'anomaly', cpuGate: 'auto', cpuGateCutoff: 0.0001 },
   crackAnomaly: { backbone: 'yolo11n-cls.pt', imgsz: 224, memoryBankSize: 8000, topKPatches: 3, valFraction: 0.2, cleanQuantile: 0.995, targetPrecision: 0.95, cleanToCrackedRatio: 100, minBalancedAccuracy: 0.8, seed: 42 },
   workflow: { autoDetectOnUpload: true }, // v1.4.15.1: start cell then crack detection as soon as images are uploaded
   crackNet: {
@@ -115,6 +115,8 @@ export function normalizeTrainingSettings(input: unknown): TrainingSettings {
     decisionThreshold: grd.engine === undefined ? 0 : number(grd.decisionThreshold, d.crackDetection.decisionThreshold, 0, 0.95), // 0 = trained model's own threshold
     lowConfidenceThreshold: number(grd.lowConfidenceThreshold, d.crackDetection.lowConfidenceThreshold, 0, 100), // percent; older saved files fall back to 90
     engine: grd.engine === 'classifier' ? 'classifier' : 'anomaly', // v1.4.17: older saved files and unknown values use the anomaly detector
+    cpuGate: grd.cpuGate === 'on' || grd.cpuGate === 'off' ? grd.cpuGate : 'auto', // v1.4.17.8
+    cpuGateCutoff: number(grd.cpuGateCutoff, d.crackDetection.cpuGateCutoff, 0, 0.5),
   };
   const ano = source.crackAnomaly && typeof source.crackAnomaly === 'object' ? source.crackAnomaly : {};
   const crackAnomaly: CrackAnomalySettings = {

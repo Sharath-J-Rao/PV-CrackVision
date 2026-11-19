@@ -157,6 +157,7 @@ export async function classifyCellViews(
 ): Promise<number[][]> {
   const { meta } = classifier;
   batchSize = meta.batchSize ?? batchSize;
+  if (classifier.provider === 'cpu' && meta.imgsz >= 448) batchSize = Math.min(batchSize, 2); // v1.4.17.8: a 640 px anomaly batch of 8 needs GBs of RAM on CPU and is no faster per cell
   const result = boxes.map(() => views.map(() => -1));
   const plane = 3 * meta.imgsz * meta.imgsz;
   const prepare = (offset: number) => Promise.all(boxes.slice(offset, offset + batchSize).map((box) => cellTensor(rawRgb, width, height, box, meta).catch(() => null)));

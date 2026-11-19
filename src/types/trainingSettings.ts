@@ -113,6 +113,10 @@ export type CrackDetectionSettings = {
   lowConfidenceThreshold: number;
   /** v1.4.17: which model scores cells. 'anomaly' (default) = distance from clean cells; 'classifier' = archived A crop classifier. */
   engine: 'anomaly' | 'classifier';
+  /** v1.4.17.8: CPU speed-up. The fast archived classifier pre-screens every cell and only cells at/above `cpuGateCutoff` go to the slow anomaly model. 'auto' = on when the anomaly model runs on CPU. */
+  cpuGate: 'auto' | 'on' | 'off';
+  /** v1.4.17.8: classifier P(cracked) a cell needs to reach the anomaly model. Very low on purpose (keeps ~100% of validation cracks, ~15% of cells). */
+  cpuGateCutoff: number;
 };
 
 /**

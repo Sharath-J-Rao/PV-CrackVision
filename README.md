@@ -1,6 +1,6 @@
 # PV CrackVision
 
-**Current release: v1.4.17.7.** Crack detection now uses an anomaly detector trained on clean cells (Training Centre 02; parameters in Training Settings 07); the earlier crop classifier is kept in the new Archive tab. Previous release: This audited update adds durable, restart-recoverable Move to negative batches, stale-undo protection, stricter image/annotation validation and local API/Electron security hardening. The shared crack selection workflow from v1.4.16.0 remains available across Crack Detection, Review and Crack Annotation. The simplified end-user workflow remains the default; annotation, training and data tabs are under Advanced mode.
+**Current release: v1.4.17.8.** Crack detection now uses an anomaly detector trained on clean cells (Training Centre 02; parameters in Training Settings 07); the earlier crop classifier is kept in the new Archive tab. Previous release: This audited update adds durable, restart-recoverable Move to negative batches, stale-undo protection, stricter image/annotation validation and local API/Electron security hardening. The shared crack selection workflow from v1.4.16.0 remains available across Crack Detection, Review and Crack Annotation. The simplified end-user workflow remains the default; annotation, training and data tabs are under Advanced mode.
 
 Cell localization (YOLO) and cracked/clean cell classification are separate model workflows with separate datasets and separate training monitors.
 

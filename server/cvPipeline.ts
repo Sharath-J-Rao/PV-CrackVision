@@ -1940,8 +1940,19 @@ async function detectLearnedEdgeCracks(
     : Promise.resolve(null);
   // One scored entry per usable cell, whichever engine produced it, so the decision loop below exists exactly once.
   const extracted: Array<{ region: ModuleRegion; cell: NonNullable<ModuleRegion['cellGrid']>['cells'][number]; probability: number; parts: number[] }> = [];
-  const probabilities = await classifyCells(rawRgb, imgWidth, imgHeight, cells.map(({ cell }) => cell.pixelBox), classifier);
-  cells.forEach(({ region, cell }, i) => { if (probabilities[i] >= 0) extracted.push({ region, cell, probability: probabilities[i], parts: [probabilities[i]] }); });
+  // v1.4.17.8 CPU gate: the 640 px anomaly model costs ~70x the 224 px classifier per cell, so on CPU the classifier pre-screens and only cells it cannot rule out reach the anomaly model.
+  let scored = cells;
+  const gateMode = trainingSettings.crackDetection.cpuGate;
+  if (anomaly && (gateMode === 'on' || (gateMode === 'auto' && classifier.provider === 'cpu'))) {
+    const gateModel = await loadCellClassifier('classifier').catch(() => null);
+    if (gateModel) {
+      const gateProbs = await classifyCells(rawRgb, imgWidth, imgHeight, cells.map(({ cell }) => cell.pixelBox), gateModel);
+      scored = cells.filter((_, i) => gateProbs[i] >= trainingSettings.crackDetection.cpuGateCutoff);
+      console.log(`[Crack anomaly] CPU gate: ${scored.length}/${cells.length} cells sent to the anomaly model (cutoff ${trainingSettings.crackDetection.cpuGateCutoff}).`);
+    } else warnings.push('CPU speed gate skipped (archived classifier not available): every cell was scored by the slow anomaly model.');
+  }
+  const probabilities = await classifyCells(rawRgb, imgWidth, imgHeight, scored.map(({ cell }) => cell.pixelBox), classifier);
+  scored.forEach(({ region, cell }, i) => { if (probabilities[i] >= 0) extracted.push({ region, cell, probability: probabilities[i], parts: [probabilities[i]] }); });
   const shadow = await shadowPromise;
   if (!extracted.length) return [];
 
