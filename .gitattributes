@@ -1,3 +1,4 @@
 # Model files are hashed in resources/models/manifest.json: never convert their line endings or treat them as text.
 resources/models/* -text
 *.onnx binary
+THIRD_PARTY_NOTICES.md text eol=lf
