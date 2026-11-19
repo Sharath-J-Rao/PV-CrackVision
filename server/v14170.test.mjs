@@ -7,6 +7,7 @@ import path from 'node:path';
 // Isolate the data folder BEFORE any module that resolves paths is loaded (static imports would run first).
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pv-anom-'));
 process.env.PV_CRACKVISION_DATA_DIR = dir;
+process.env.PV_BUNDLED_MODELS_DIR = path.join(dir, 'no-bundled-models'); // isolate from the shipped resources/models (v1.4.17.7)
 const { DEFAULT_TRAINING_SETTINGS, normalizeTrainingSettings } = await import('./trainingSettings.ts');
 
 test('v1.4.17: anomaly detector is the default crack engine; the archived classifier stays selectable', () => {
